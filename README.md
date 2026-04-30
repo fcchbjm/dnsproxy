@@ -120,6 +120,11 @@ Discussion: [Proxy Protocol v2 support (Discussion #1)](https://github.com/fcchb
 If you are running this behind a load balancer in production,
 feedback on real deployment patterns is valuable.
 
+Tracking notice:
+
+- [Tracking] PPv2 high-concurrency optimization: mitigating connection backlog drops ([Issue #2](https://github.com/fcchbjm/dnsproxy/issues/2))
+- Implementation progress is tracked in [PR #3](https://github.com/fcchbjm/dnsproxy/pull/3) and follow-up comments under Issue #2.
+
 Particularly interested in:
 
 - HAProxy / Nginx / Caddy / Envoy based setups
