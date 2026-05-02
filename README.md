@@ -14,6 +14,7 @@ Key differences from upstream:
  - TCP Fast Open (TFO) on supported DoT listener platforms.
  - TLS session resumption paths (server and upstream client side).
  - Protocol-level behavior correction for TCP close-phase RST scenarios.
+ - Robust inbound parsing for DNS-over-TCP and DoT: the 2-byte RFC 1035-style length prefix is always read in full, avoiding intermittent mis-framing when TCP delivers short reads (no configuration change).
 
 ## Quick Start
 
