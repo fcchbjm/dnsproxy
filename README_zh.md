@@ -125,6 +125,11 @@ QUIC/UDP 的语义与代价模型不同（逐包语义、地址验证、connecti
 
 如果你正在生产环境中以负载均衡后置方式运行，欢迎反馈真实部署形态，这些信息很有价值。
 
+跟踪通知：
+
+- [Tracking] PPv2 high-concurrency optimization: mitigating connection backlog drops（[Issue #2](https://github.com/fcchbjm/dnsproxy/issues/2)）
+- 实现进展见 [PR #3](https://github.com/fcchbjm/dnsproxy/pull/3)，后续状态更新会同步在 Issue #2 评论区。
+
 当前特别关注以下信息：
 
 - 基于 HAProxy / Nginx / Caddy / Envoy 的部署形态

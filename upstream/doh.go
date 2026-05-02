@@ -501,6 +501,11 @@ type http3Transport struct {
 
 	closed bool
 	mu     sync.RWMutex
+
+	// initMu serializes the first connection setup when multiple goroutines
+	// race on RoundTrip with ErrNoCachedConn, avoiding concurrent Dial +
+	// stream setup inside quic-go HTTP/3 under -race.
+	initMu sync.Mutex
 }
 
 // type check
@@ -509,17 +514,39 @@ var _ http.RoundTripper = (*http3Transport)(nil)
 // RoundTrip implements the http.RoundTripper interface for *http3Transport.
 func (h *http3Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	closed := h.closed
+	h.mu.RUnlock()
 
-	if h.closed {
+	if closed {
 		return nil, net.ErrClosed
 	}
 
 	// Try to use cached connection to the target host if it's available.
 	resp, err = h.baseTransport.RoundTripOpt(req, http3.RoundTripOpt{OnlyCachedConn: true})
 
+	if err != nil && !errors.Is(err, http3.ErrNoCachedConn) {
+		return resp, err
+	}
+
+	if err == nil {
+		return resp, nil
+	}
+
+	// Only one goroutine may drive the initial dial + HTTP/3 setup; others
+	// retry the cached path after the lock.
+	h.initMu.Lock()
+	defer h.initMu.Unlock()
+
+	h.mu.RLock()
+	closed = h.closed
+	h.mu.RUnlock()
+
+	if closed {
+		return nil, net.ErrClosed
+	}
+
+	resp, err = h.baseTransport.RoundTripOpt(req, http3.RoundTripOpt{OnlyCachedConn: true})
 	if errors.Is(err, http3.ErrNoCachedConn) {
-		// If there are no cached connection, trigger creating a new one.
 		resp, err = h.baseTransport.RoundTrip(req)
 	}
 
