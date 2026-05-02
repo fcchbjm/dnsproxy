@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sync"
@@ -526,6 +527,72 @@ func TestProxyConsumeProxyProtocolV2_UnsupportedFamilyConsumesPayload(t *testing
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported proxy protocol v2 address family")
 	require.Zero(t, reader.Buffered())
+}
+
+// splitTCPReadConn is a minimal net.Conn whose Read advances the stream by at
+// most one byte per call, modeling TCP short reads on length prefix and body.
+type splitTCPReadConn struct {
+	r io.Reader
+}
+
+func (c *splitTCPReadConn) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	var one [1]byte
+
+	n, err = c.r.Read(one[:])
+	if n > 0 {
+		p[0] = one[0]
+	}
+
+	return n, err
+}
+
+func (*splitTCPReadConn) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func (*splitTCPReadConn) Close() error { return nil }
+
+func (*splitTCPReadConn) LocalAddr() net.Addr { return nil }
+
+func (*splitTCPReadConn) RemoteAddr() net.Addr { return nil }
+
+func (*splitTCPReadConn) SetDeadline(time.Time) error { return nil }
+
+func (*splitTCPReadConn) SetReadDeadline(time.Time) error { return nil }
+
+func (*splitTCPReadConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestReadPrefixed_splitLengthPrefix(t *testing.T) {
+	payload := []byte{0xde, 0xad, 0xbe, 0xef}
+	prefix := make([]byte, 2)
+
+	binary.BigEndian.PutUint16(prefix, uint16(len(payload)))
+
+	data := append(prefix, payload...)
+	conn := &splitTCPReadConn{r: bytes.NewReader(data)}
+
+	got, err := readPrefixed(conn)
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+}
+
+func TestReadPrefixed_incompleteLengthPrefix(t *testing.T) {
+	conn := &splitTCPReadConn{r: bytes.NewReader([]byte{0x00})}
+
+	_, err := readPrefixed(conn)
+	require.Error(t, err)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+}
+
+func TestReadPrefixed_zeroLengthBody(t *testing.T) {
+	// Framed length 0: prefix [0,0] only, body read is a no-op; still exercise split reads on prefix.
+	conn := &splitTCPReadConn{r: bytes.NewReader([]byte{0x00, 0x00})}
+
+	got, err := readPrefixed(conn)
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func proxyProtocolV2Header(src, dst netip.AddrPort) (hdr []byte) {
