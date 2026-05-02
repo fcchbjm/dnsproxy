@@ -14,6 +14,7 @@ Language: [English](README.md) | **中文**
  - 实现TCP Fast Open(TFO)
  - 实现TLS会话恢复
  - 优化TCP挥手RST问题
+ - 修正 DNS-over-TCP / DoT 入口消息分帧：两字节长度前缀始终完整读取（应对 TCP 短读），减少偶发解析失败（无可配置项）
 
 ## 快速开始
 

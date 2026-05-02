@@ -725,7 +725,10 @@ func TestOneByOneUpstreamsExchange(t *testing.T) {
 	requireResponse(t, req, res)
 
 	elapsed := time.Since(start)
-	assert.Greater(t, 3*testTimeout, elapsed)
+	// Upper bound: sequential tries each bounded by testTimeout, plus RTT to the
+	// working upstream and -race / scheduler jitter.  3×testTimeout matched ideal
+	// timing only and flaked under -race (see AGENTS.md §5).
+	assert.Greater(t, 10*testTimeout, elapsed)
 }
 
 // newLocalUpstreamListener creates a new localhost listener on the specified

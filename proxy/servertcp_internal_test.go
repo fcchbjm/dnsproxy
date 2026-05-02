@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sync"
@@ -319,7 +320,13 @@ func TestProxy_tlsProxyProtocolV2_DiscardExtraPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	dnsConn := &dns.Conn{Conn: tlsConn}
-	require.NoError(t, dnsConn.SetDeadline(time.Now().Add(testTimeout)))
+	// waitTimeout must cover the end-to-end DNS exchange: the proxy is configured
+	// with [UpstreamConfig] Timeout defaultTimeout and forwards to 8.8.8.8.  Using
+	// testTimeout (500ms) for client Read/Write was inconsistent with that upstream
+	// window and could fail on slow or loaded runners (e.g. CI) before the server
+	// finished the upstream leg — unrelated to readPrefixed framing.
+	waitTimeout := defaultTimeout
+	require.NoError(t, dnsConn.SetDeadline(time.Now().Add(waitTimeout)))
 	err = dnsConn.WriteMsg(newTestMessage())
 	require.NoError(t, err)
 
@@ -526,6 +533,72 @@ func TestProxyConsumeProxyProtocolV2_UnsupportedFamilyConsumesPayload(t *testing
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported proxy protocol v2 address family")
 	require.Zero(t, reader.Buffered())
+}
+
+// splitTCPReadConn is a minimal net.Conn whose Read advances the stream by at
+// most one byte per call, modeling TCP short reads on length prefix and body.
+type splitTCPReadConn struct {
+	r io.Reader
+}
+
+func (c *splitTCPReadConn) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	var one [1]byte
+
+	n, err = c.r.Read(one[:])
+	if n > 0 {
+		p[0] = one[0]
+	}
+
+	return n, err
+}
+
+func (*splitTCPReadConn) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func (*splitTCPReadConn) Close() error { return nil }
+
+func (*splitTCPReadConn) LocalAddr() net.Addr { return nil }
+
+func (*splitTCPReadConn) RemoteAddr() net.Addr { return nil }
+
+func (*splitTCPReadConn) SetDeadline(time.Time) error { return nil }
+
+func (*splitTCPReadConn) SetReadDeadline(time.Time) error { return nil }
+
+func (*splitTCPReadConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestReadPrefixed_splitLengthPrefix(t *testing.T) {
+	payload := []byte{0xde, 0xad, 0xbe, 0xef}
+	prefix := make([]byte, 2)
+
+	binary.BigEndian.PutUint16(prefix, uint16(len(payload)))
+
+	data := append(prefix, payload...)
+	conn := &splitTCPReadConn{r: bytes.NewReader(data)}
+
+	got, err := readPrefixed(conn)
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+}
+
+func TestReadPrefixed_incompleteLengthPrefix(t *testing.T) {
+	conn := &splitTCPReadConn{r: bytes.NewReader([]byte{0x00})}
+
+	_, err := readPrefixed(conn)
+	require.Error(t, err)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+}
+
+func TestReadPrefixed_zeroLengthBody(t *testing.T) {
+	// Framed length 0: prefix [0,0] only, body read is a no-op; still exercise split reads on prefix.
+	conn := &splitTCPReadConn{r: bytes.NewReader([]byte{0x00, 0x00})}
+
+	got, err := readPrefixed(conn)
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func proxyProtocolV2Header(src, dst netip.AddrPort) (hdr []byte) {
