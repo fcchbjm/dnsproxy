@@ -320,7 +320,13 @@ func TestProxy_tlsProxyProtocolV2_DiscardExtraPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	dnsConn := &dns.Conn{Conn: tlsConn}
-	require.NoError(t, dnsConn.SetDeadline(time.Now().Add(testTimeout)))
+	// waitTimeout must cover the end-to-end DNS exchange: the proxy is configured
+	// with [UpstreamConfig] Timeout defaultTimeout and forwards to 8.8.8.8.  Using
+	// testTimeout (500ms) for client Read/Write was inconsistent with that upstream
+	// window and could fail on slow or loaded runners (e.g. CI) before the server
+	// finished the upstream leg — unrelated to readPrefixed framing.
+	waitTimeout := defaultTimeout
+	require.NoError(t, dnsConn.SetDeadline(time.Now().Add(waitTimeout)))
 	err = dnsConn.WriteMsg(newTestMessage())
 	require.NoError(t, err)
 
