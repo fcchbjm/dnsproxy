@@ -370,10 +370,7 @@ func newTxts(tb testing.TB, txtDataLen int) (txts []string) {
 
 	// *dns.TXT requires splitting the actual data into 256-byte chunks.
 	for i := range txtDataChunkNum {
-		r := txtDataChunkLen * (i + 1)
-		if r > txtDataLen {
-			r = txtDataLen
-		}
+		r := min(txtDataChunkLen*(i+1), txtDataLen)
 		txts[i] = string(randData[txtDataChunkLen*i : r])
 	}
 
@@ -620,7 +617,6 @@ func TestExchangeWithReservedDomains(t *testing.T) {
 	t.Cleanup(func() { _ = ups.Shutdown() })
 
 	goodAddr := "tcp://" + testutil.RequireTypeAssert[*net.TCPAddr](t, ups.Listener.Addr()).AddrPort().String()
-	badAddr := "tcp://127.0.0.1:1"
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:        testLogger,
@@ -629,8 +625,8 @@ func TestExchangeWithReservedDomains(t *testing.T) {
 		UpstreamConfig: newTestUpstreamConfigWithBoot(
 			t,
 			testTimeout,
-			"[/adguard.com/]"+badAddr,
-			"[/google.ru/]"+badAddr,
+			"[/adguard.com/]192.0.2.1",
+			"[/google.ru/]192.0.2.2",
 			"[/maps.google.ru/]#",
 			goodAddr,
 		),
