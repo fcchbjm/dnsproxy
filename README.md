@@ -1,6 +1,6 @@
 # fcchbjm/dnsproxy
 
-[![Code Coverage](https://codecov.io/gh/fcchbjm/dnsproxy/branch/main/graph/badge.svg)](https://codecov.io/github/fcchbjm/dnsproxy?branch=master)
+[![Code Coverage](https://codecov.io/gh/fcchbjm/dnsproxy/graph/badge.svg?token=RRAW7LW7ZB)](https://codecov.io/gh/fcchbjm/dnsproxy)
 [![Go Report Card](https://goreportcard.com/badge/github.com/fcchbjm/dnsproxy)](https://goreportcard.com/report/fcchbjm/dnsproxy)
 [![Go Doc](https://godoc.org/github.com/fcchbjm/dnsproxy?status.svg)](https://godoc.org/github.com/fcchbjm/dnsproxy)
 
