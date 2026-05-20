@@ -1,5 +1,9 @@
 # fcchbjm/dnsproxy
 
+[![Code Coverage](https://codecov.io/gh/fcchbjm/dnsproxy/branch/main/graph/badge.svg)](https://codecov.io/github/fcchbjm/dnsproxy?branch=master)
+[![Go Report Card](https://goreportcard.com/badge/github.com/fcchbjm/dnsproxy)](https://goreportcard.com/report/fcchbjm/dnsproxy)
+[![Go Doc](https://godoc.org/github.com/fcchbjm/dnsproxy?status.svg)](https://godoc.org/github.com/fcchbjm/dnsproxy)
+
 Language: [English](README.md) | **中文**
 
 本仓库基于上游项目 [AdguardTeam/dnsproxy](https://github.com/AdguardTeam/dnsproxy)。
