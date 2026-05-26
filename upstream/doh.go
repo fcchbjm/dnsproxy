@@ -501,7 +501,7 @@ type http3Transport struct {
 	baseTransport *http3.Transport
 
 	closed bool
-	mu     sync.RWMutex
+	mu     sync.Mutex
 }
 
 // type check
@@ -509,8 +509,8 @@ var _ http.RoundTripper = (*http3Transport)(nil)
 
 // RoundTrip implements the http.RoundTripper interface for *http3Transport.
 func (h *http3Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	if h.closed {
 		return nil, net.ErrClosed
