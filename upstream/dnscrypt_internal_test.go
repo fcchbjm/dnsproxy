@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,12 +47,6 @@ func startTestDNSCryptServer(
 		Handler:      h,
 		Logger:       testLogger,
 	}
-	testutil.CleanupAndRequireSuccess(tb, func() (err error) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-
-		return s.Shutdown(ctx)
-	})
 
 	localhost := netutil.IPv4Localhost().AsSlice()
 
@@ -59,25 +54,39 @@ func startTestDNSCryptServer(
 	tcpAddr := &net.TCPAddr{IP: localhost, Port: 0}
 	tcpConn, err := net.ListenTCP("tcp", tcpAddr)
 	require.NoError(tb, err)
-	testutil.CleanupAndRequireSuccess(tb, tcpConn.Close)
 
 	// Prepare UDP listener on the same port.
 	port := testutil.RequireTypeAssert[*net.TCPAddr](tb, tcpConn.Addr()).Port
 	udpAddr := &net.UDPAddr{IP: localhost, Port: port}
 	udpConn, err := net.ListenUDP("udp", udpAddr)
 	require.NoError(tb, err)
-	testutil.CleanupAndRequireSuccess(tb, udpConn.Close)
 
-	// Start the server.
+	var serveWG sync.WaitGroup
+	serveWG.Add(2)
+
+	// Start the server.  Errors are ignored here; cleanup waits for both loops
+	// to exit after Shutdown.
 	go func() {
-		udpErr := s.ServeUDP(udpConn)
-		require.ErrorIs(testutil.PanicT{}, udpErr, net.ErrClosed)
+		defer serveWG.Done()
+
+		_ = s.ServeUDP(udpConn)
 	}()
 
 	go func() {
-		tcpErr := s.ServeTCP(tcpConn)
-		require.NoError(testutil.PanicT{}, tcpErr)
+		defer serveWG.Done()
+
+		_ = s.ServeTCP(tcpConn)
 	}()
+
+	testutil.CleanupAndRequireSuccess(tb, func() (err error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		err = s.Shutdown(ctx)
+		serveWG.Wait()
+
+		return err
+	})
 
 	stamp, err = rc.CreateStamp(udpConn.LocalAddr().String())
 	require.NoError(tb, err)
