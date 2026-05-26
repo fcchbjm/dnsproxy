@@ -514,44 +514,38 @@ var _ http.RoundTripper = (*http3Transport)(nil)
 
 // RoundTrip implements the http.RoundTripper interface for *http3Transport.
 func (h *http3Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	h.mu.RLock()
-	closed := h.closed
-	h.mu.RUnlock()
-
-	if closed {
-		return nil, net.ErrClosed
-	}
-
 	// Try to use cached connection to the target host if it's available.
 	resp, err = h.baseTransport.RoundTripOpt(req, http3.RoundTripOpt{OnlyCachedConn: true})
+	if err == nil {
+		return resp, nil
+	}
 
 	if err != nil && !errors.Is(err, http3.ErrNoCachedConn) {
 		return resp, err
 	}
 
-	if err == nil {
-		return resp, nil
-	}
-
-	// Only one goroutine may drive the initial dial + HTTP/3 setup; others
-	// retry the cached path after the lock.
+	// Only one goroutine may dial when there is no cached conn (see initMu).
+	// Others recheck the cache after the lock, matching upstream dial flow.
 	h.initMu.Lock()
 	defer h.initMu.Unlock()
 
-	h.mu.RLock()
-	closed = h.closed
-	h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	if closed {
+	if h.closed {
 		return nil, net.ErrClosed
 	}
 
 	resp, err = h.baseTransport.RoundTripOpt(req, http3.RoundTripOpt{OnlyCachedConn: true})
-	if errors.Is(err, http3.ErrNoCachedConn) {
-		resp, err = h.baseTransport.RoundTrip(req)
+	if err == nil {
+		return resp, nil
 	}
 
-	return resp, err
+	if err != nil && !errors.Is(err, http3.ErrNoCachedConn) {
+		return resp, err
+	}
+
+	return h.baseTransport.RoundTrip(req)
 }
 
 // type check

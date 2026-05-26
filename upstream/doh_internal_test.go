@@ -269,7 +269,8 @@ func TestUpstreamDoH_serverRestart(t *testing.T) {
 }
 
 func TestUpstreamDoH_0RTT(t *testing.T) {
-	t.Parallel()
+	// Do not run in parallel: qlog/0-RTT assertions are sensitive to timing,
+	// especially under -race on macOS CI.
 
 	// Run the first server instance.
 	srv := startDoHServer(t, testDoHServerOptions{
@@ -311,15 +312,16 @@ func TestUpstreamDoH_0RTT(t *testing.T) {
 	require.NoError(t, err)
 	requireResponse(t, req, resp)
 
-	// Check traced connections info.
-	conns := tracer.connectionsInfo()
-	require.Len(t, conns, 2)
+	// Check traced connections info.  qlog may arrive slightly after Exchange
+	// returns on loaded CI runners (notably macOS + -race).
+	require.Eventually(t, func() bool {
+		conns := tracer.connectionsInfo()
+		if len(conns) != 2 {
+			return false
+		}
 
-	// Examine the first connection (no 0-RTT there).
-	require.False(t, conns[0].is0RTT())
-
-	// Examine the second connection (the one that used 0-RTT).
-	require.True(t, conns[1].is0RTT())
+		return !conns[0].is0RTT() && conns[1].is0RTT()
+	}, 5*time.Second, 50*time.Millisecond, "expected 2 conns, second with 0-RTT")
 }
 
 // testDoHServerOptions allows customizing testDoHServer behavior.
