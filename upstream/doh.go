@@ -17,6 +17,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/httphdr"
+	"github.com/AdguardTeam/golibs/ioutil"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/fcchbjm/dnsproxy/internal/bootstrap"
 	"github.com/miekg/dns"
@@ -288,7 +289,8 @@ func (p *dnsOverHTTPS) exchangeHTTPSClient(
 	}
 	defer slogutil.CloseAndLog(httpReq.Context(), p.logger, httpResp.Body, slog.LevelDebug)
 
-	body, err := io.ReadAll(httpResp.Body)
+	limitBody := ioutil.LimitReader(httpResp.Body, dns.MaxMsgSize)
+	body, err := io.ReadAll(limitBody)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", p.addrRedacted, err)
 	}
