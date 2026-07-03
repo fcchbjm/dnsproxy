@@ -73,6 +73,8 @@ windows  arm64     0   0"
 readonly platforms
 
 build() {
+	log "building: $1"
+
 	# Get the arguments.  Here and below, use the "build_" prefix for all
 	# variables local to function build.
 	build_dir="${dist}/${1}" \
@@ -109,7 +111,7 @@ build() {
 		VERBOSE="$((verbose - 1))" \
 		sh ./scripts/make/go-build.sh
 
-	log "$build_output"
+	log "build output: $build_output"
 
 	# Prepare the build directory for archiving.
 	cp ./LICENSE ./README.md "$build_dir"
@@ -128,7 +130,7 @@ build() {
 		;;
 	esac
 
-	log "$build_archive"
+	log "build success: $build_archive"
 }
 
 log "starting builds"

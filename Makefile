@@ -64,7 +64,8 @@ init: ; git config core.hooksPath ./scripts/hooks
 .PHONY: test
 test: go-test
 
-.PHONY: go-build go-deps go-env go-lint go-test go-upd-tools
+.PHONY: go-bench go-build go-deps go-env go-lint go-test go-upd-tools
+go-bench:     ; $(ENV)          "$(SHELL)" ./scripts/make/go-bench.sh
 go-build:     ; $(ENV)          "$(SHELL)" ./scripts/make/go-build.sh
 go-deps:      ; $(ENV)          "$(SHELL)" ./scripts/make/go-deps.sh
 go-env:       ; $(ENV)          "$(GO.MACRO)" env
@@ -99,6 +100,8 @@ clean: ; $(ENV) $(GO.MACRO) clean && rm -f -r '$(DIST_DIR)'
 release: clean
 	$(ENV) "$(SHELL)" ./scripts/make/build-release.sh
 
+.PHONY: build-docker
+build-docker: ; $(ENV) "$(SHELL)" ./scripts/make/build-docker.sh
+
 .PHONY: docker
-docker: release
-	$(ENV) "$(SHELL)" ./scripts/make/build-docker.sh
+docker: release build-docker
