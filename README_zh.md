@@ -1,7 +1,6 @@
 # fcchbjm/dnsproxy
 
 [![Code Coverage](https://codecov.io/gh/fcchbjm/dnsproxy/graph/badge.svg?token=RRAW7LW7ZB)](https://codecov.io/gh/fcchbjm/dnsproxy)
-[![Go Report Card](https://goreportcard.com/badge/github.com/fcchbjm/dnsproxy)](https://goreportcard.com/report/fcchbjm/dnsproxy)
 [![Go Doc](https://godoc.org/github.com/fcchbjm/dnsproxy?status.svg)](https://godoc.org/github.com/fcchbjm/dnsproxy)
 
 Language: [English](README.md) | **中文**
@@ -129,11 +128,6 @@ QUIC/UDP 的语义与代价模型不同（逐包语义、地址验证、connecti
 #### 真实环境部署反馈
 
 如果你正在生产环境中以负载均衡后置方式运行，欢迎反馈真实部署形态，这些信息很有价值。
-
-跟踪通知：
-
-- [Tracking] PPv2 high-concurrency optimization: mitigating connection backlog drops（[Issue #2](https://github.com/fcchbjm/dnsproxy/issues/2)）
-- 实现进展见 [PR #3](https://github.com/fcchbjm/dnsproxy/pull/3)，后续状态更新会同步在 Issue #2 评论区。
 
 当前特别关注以下信息：
 
