@@ -47,6 +47,23 @@ const (
 	dohMaxIdleConns = 2
 )
 
+// dohQUICDialMu serializes QUIC dials initiated by DoH (probe + transport) to
+// avoid overlapping connection setup with quic-go HTTP/3 under -race.
+var dohQUICDialMu sync.Mutex
+
+// dialDoHQUIC dials a QUIC connection for DoH upstreams.
+func dialDoHQUIC(
+	ctx context.Context,
+	addr string,
+	tlsConfig *tls.Config,
+	quicConfig *quic.Config,
+) (conn *quic.Conn, err error) {
+	dohQUICDialMu.Lock()
+	defer dohQUICDialMu.Unlock()
+
+	return quic.DialAddrEarly(ctx, addr, tlsConfig, quicConfig)
+}
+
 // dnsOverHTTPS is a struct that implements the Upstream interface for the
 // DNS-over-HTTPS protocol.
 type dnsOverHTTPS struct {
@@ -154,9 +171,10 @@ func (p *dnsOverHTTPS) Address() string { return p.addrRedacted }
 
 // Exchange implements the [Upstream] interface for *dnsOverHTTPS.
 func (p *dnsOverHTTPS) Exchange(req *dns.Msg) (resp *dns.Msg, err error) {
-	// Check if there was already an active client before sending the request.
-	// We'll only attempt to re-connect if there was one.
-	client, isCached, err := p.getClient()
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+
+	client, isCached, err := p.getClientLocked()
 	if err != nil {
 		return nil, fmt.Errorf("failed to init http client: %w", err)
 	}
@@ -170,7 +188,7 @@ func (p *dnsOverHTTPS) Exchange(req *dns.Msg) (resp *dns.Msg, err error) {
 	// the case when the connection was closed (due to inactivity for example)
 	// AND the server refuses to open a 0-RTT connection.
 	for i := 0; isCached && p.shouldRetry(err) && i < 2; i++ {
-		client, err = p.resetClient(err)
+		client, err = p.resetClientLocked(err)
 		if err != nil {
 			return nil, fmt.Errorf("failed to reset http client: %w", err)
 		}
@@ -180,7 +198,7 @@ func (p *dnsOverHTTPS) Exchange(req *dns.Msg) (resp *dns.Msg, err error) {
 
 	if err != nil {
 		// If the request failed anyway, make sure we don't use this client.
-		_, resErr := p.resetClient(err)
+		_, resErr := p.resetClientLocked(err)
 
 		return nil, errors.WithDeferred(err, resErr)
 	}
@@ -363,6 +381,11 @@ func (p *dnsOverHTTPS) resetClient(resetErr error) (client *http.Client, err err
 	p.clientMu.Lock()
 	defer p.clientMu.Unlock()
 
+	return p.resetClientLocked(resetErr)
+}
+
+// resetClientLocked is like resetClient but assumes that clientMu is held.
+func (p *dnsOverHTTPS) resetClientLocked(resetErr error) (client *http.Client, err error) {
 	if errors.Is(resetErr, quic.Err0RTTRejected) {
 		// Reset the TokenStore only if 0-RTT was rejected.
 		p.resetQUICConfig()
@@ -404,10 +427,15 @@ func (p *dnsOverHTTPS) resetQUICConfig() {
 // getClient gets or lazily initializes an HTTP client (and transport) that will
 // be used for this DoH resolver.
 func (p *dnsOverHTTPS) getClient() (c *http.Client, isCached bool, err error) {
-	startTime := time.Now()
-
 	p.clientMu.Lock()
 	defer p.clientMu.Unlock()
+
+	return p.getClientLocked()
+}
+
+// getClientLocked is like getClient but assumes that clientMu is held.
+func (p *dnsOverHTTPS) getClientLocked() (c *http.Client, isCached bool, err error) {
+	startTime := time.Now()
 
 	if p.client != nil {
 		return p.client, true, nil
@@ -580,7 +608,7 @@ func (p *dnsOverHTTPS) createTransportH3(
 			tlsCfg *tls.Config,
 			cfg *quic.Config,
 		) (c *quic.Conn, err error) {
-			return quic.DialAddrEarly(ctx, addr, tlsCfg, cfg)
+			return dialDoHQUIC(ctx, addr, tlsCfg, cfg)
 		},
 		DisableCompression: true,
 		TLSClientConfig:    tlsConfig,
@@ -671,7 +699,7 @@ func (p *dnsOverHTTPS) probeQUIC(addr string, tlsConfig *tls.Config, ch chan err
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(t))
 	defer cancel()
 
-	conn, err := quic.DialAddrEarly(ctx, addr, tlsConfig, p.getQUICConfig())
+	conn, err := dialDoHQUIC(ctx, addr, tlsConfig, p.getQUICConfig())
 	if err != nil {
 		ch <- fmt.Errorf("opening quic connection to %s: %w", p.addrRedacted, err)
 		return
