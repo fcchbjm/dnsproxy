@@ -22,27 +22,8 @@ log() {
 
 log 'starting to build dnsproxy release'
 
-version="${VERSION:-0}"
+. ./scripts/make/version.sh
 
-if [ "$version" = '0' ]; then
-	version="${GITHUB_REF:-}"
-	version="${version##*/}"
-fi
-
-case "$version" in
-v*)
-	if ! printf '%s\n' "$version" | grep -E -e '^v[0-9]+\.[0-9]+\.[0-9]+$' -q; then
-		printf "version is invalid '%s'\n" "$version" 1>&2
-
-		exit 1
-	fi
-	;;
-*)
-	version='dev'
-	;;
-esac
-
-readonly version
 log "version '$version'"
 
 dist="${DIST_DIR:-build}"
@@ -92,6 +73,8 @@ windows  arm64     0   0"
 readonly platforms
 
 build() {
+	log "building: $1"
+
 	# Get the arguments.  Here and below, use the "build_" prefix for all
 	# variables local to function build.
 	build_dir="${dist}/${1}" \
@@ -118,16 +101,17 @@ build() {
 	#
 	# Don't use quotes with $build_par because we want an empty space if
 	# parallelism wasn't set.
-	env GOARCH="$build_arch" \
+	env \
+		APP_VERSION="$version" \
+		GOARCH="$build_arch" \
 		GOARM="${build_arm#0}" \
 		GOMIPS="${build_mips#0}" \
 		GOOS="$os" \
-		VERBOSE="$((verbose - 1))" \
-		VERSION="$version" \
 		OUT="$build_output" \
+		VERBOSE="$((verbose - 1))" \
 		sh ./scripts/make/go-build.sh
 
-	log "$build_output"
+	log "build output: $build_output"
 
 	# Prepare the build directory for archiving.
 	cp ./LICENSE ./README.md "$build_dir"
@@ -146,7 +130,7 @@ build() {
 		;;
 	esac
 
-	log "$build_archive"
+	log "build success: $build_archive"
 }
 
 log "starting builds"

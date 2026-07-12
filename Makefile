@@ -7,7 +7,7 @@
 # This comment is used to simplify checking local copies of the Makefile.  Bump
 # this number every time a significant change is made to this Makefile.
 #
-# AdGuard-Project-Version: 14
+# AdGuard-Project-Version: 18
 
 # Don't name these macros "GO" etc., because GNU Make apparently makes them
 # exported environment variables with the literal value of "${GO:-go}" and so
@@ -18,21 +18,24 @@
 GO.MACRO = $${GO:-go}
 VERBOSE.MACRO = $${VERBOSE:-0}
 
+APP_VERSION = 0
 BRANCH = $${BRANCH:-$$(git rev-parse --abbrev-ref HEAD)}
 DIST_DIR = build
 GOAMD64 = v1
 GOPROXY = https://proxy.golang.org|direct
 GOTELEMETRY = off
 OUT = dnsproxy
-GOTOOLCHAIN = go1.26.3
+GOTOOLCHAIN = go1.26.4
 RACE = 0
 # Passed to go-test.sh; override with make test TEST_RACE=0 (e.g. Windows CI:
 # quic-go HTTP/3 + -race can crash with access violation).
 TEST_RACE = 1
 REVISION = $${REVISION:-$$(git rev-parse --short HEAD)}
-VERSION = 0
 
+# TODO(f.setrakov): Remove the bin directory from the paths, as it is no longer
+# needed.
 ENV = env \
+	APP_VERSION="$(APP_VERSION)" \
 	BRANCH="$(BRANCH)" \
 	DIST_DIR='$(DIST_DIR)' \
 	GO="$(GO.MACRO)" \
@@ -45,7 +48,6 @@ ENV = env \
 	RACE='$(RACE)' \
 	REVISION="$(REVISION)" \
 	VERBOSE="$(VERBOSE.MACRO)" \
-	VERSION="$(VERSION)" \
 
 # Keep the line above blank.
 
@@ -65,7 +67,8 @@ init: ; git config core.hooksPath ./scripts/hooks
 .PHONY: test
 test: go-test
 
-.PHONY: go-build go-deps go-env go-lint go-test go-upd-tools
+.PHONY: go-bench go-build go-deps go-env go-lint go-test go-upd-tools
+go-bench:     ; $(ENV)          "$(SHELL)" ./scripts/make/go-bench.sh
 go-build:     ; $(ENV)          "$(SHELL)" ./scripts/make/go-build.sh
 go-deps:      ; $(ENV)          "$(SHELL)" ./scripts/make/go-deps.sh
 go-env:       ; $(ENV)          "$(GO.MACRO)" env
@@ -100,6 +103,8 @@ clean: ; $(ENV) $(GO.MACRO) clean && rm -f -r '$(DIST_DIR)'
 release: clean
 	$(ENV) "$(SHELL)" ./scripts/make/build-release.sh
 
+.PHONY: build-docker
+build-docker: ; $(ENV) "$(SHELL)" ./scripts/make/build-docker.sh
+
 .PHONY: docker
-docker: release
-	$(ENV) "$(SHELL)" ./scripts/make/build-docker.sh
+docker: release build-docker

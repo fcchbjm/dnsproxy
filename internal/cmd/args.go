@@ -11,7 +11,7 @@ import (
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/osutil"
 	"github.com/AdguardTeam/golibs/timeutil"
-	"github.com/fcchbjm/dnsproxy/internal/version"
+	"github.com/AdguardTeam/golibs/version"
 )
 
 // Indexes to help with the [commandLineOptions] initialization.
@@ -127,7 +127,7 @@ var commandLineOptions = []*commandLineOption{
 	},
 	dnsCryptConfigPathIdx: {
 		description: "Path to a file with DNSCrypt configuration. You can generate one using " +
-			"https://github.com/ameshkov/dnscrypt.",
+			"https://github.com/AdguardTeam/dnscrypt.",
 		long:      "dnscrypt-config",
 		short:     "g",
 		valueType: "path",

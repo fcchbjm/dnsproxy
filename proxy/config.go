@@ -9,10 +9,10 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/AdguardTeam/dnscrypt"
 	"github.com/AdguardTeam/golibs/contextutil"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/netutil"
-	"github.com/ameshkov/dnscrypt/v2"
 	"github.com/fcchbjm/dnsproxy/upstream"
 )
 
@@ -87,7 +87,7 @@ type Config struct {
 
 	// DNSCryptResolverCert is the DNSCrypt resolver certificate.  Required for
 	// DNSCrypt server.
-	DNSCryptResolverCert *dnscrypt.Cert
+	DNSCryptResolverCert *dnscrypt.Certificate
 
 	// BindRetryConfig configures the listeners binding retrying.  If nil,
 	// retries are disabled.

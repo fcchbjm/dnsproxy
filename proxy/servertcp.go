@@ -736,7 +736,7 @@ func (p *Proxy) shutdownGenericConn(ctx context.Context, conn net.Conn, proto Pr
 	}
 }
 
-// Writes a response to the TCP (or TLS) client
+// respondTCP writes a response to the TCP (or TLS) client.  d must not be nil.
 func (p *Proxy) respondTCP(d *DNSContext) error {
 	resp := d.Res
 	conn := d.Conn

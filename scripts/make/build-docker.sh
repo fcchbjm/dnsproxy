@@ -12,11 +12,14 @@ fi
 
 set -e -f -u
 
+. ./scripts/make/version.sh
+
+printf 'version "%s"\n' "$version" 1>&2
+
 # Require these to be set.
 commit="${REVISION:?please set REVISION}"
 dist_dir="${DIST_DIR:?please set DIST_DIR}"
-version="${VERSION:?please set VERSION}"
-readonly commit dist_dir version
+readonly commit dist_dir
 
 # Allow users to use sudo.
 sudo_cmd="${SUDO:-}"
@@ -90,10 +93,10 @@ docker_build_opt_tag() {
 		docker \
 		buildx \
 		build \
+		--build-arg APP_VERSION="$version" \
 		--build-arg BUILD_DATE="$build_date" \
 		--build-arg DIST_DIR="$dist_dir" \
 		--build-arg VCS_REF="$commit" \
-		--build-arg VERSION="$version" \
 		--platform "$docker_platforms" \
 		--progress 'plain' \
 		;

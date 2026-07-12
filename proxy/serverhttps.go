@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/AdguardTeam/golibs/httphdr"
+	"github.com/AdguardTeam/golibs/ioutil"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/fcchbjm/dnsproxy/internal/bootstrap"
 	"github.com/miekg/dns"
@@ -159,8 +160,8 @@ func newDoHReq(
 			return nil, http.StatusUnsupportedMediaType
 		}
 
-		// TODO(d.kolyshev): Limit reader.
-		buf, err = io.ReadAll(r.Body)
+		limitBody := ioutil.LimitReader(r.Body, dns.MaxMsgSize)
+		buf, err = io.ReadAll(limitBody)
 		if err != nil {
 			l.DebugContext(ctx, "reading http request body", slogutil.KeyError, err)
 
@@ -285,7 +286,7 @@ func matchesUserinfo(userinfo *url.Userinfo, user, pass string) (ok bool) {
 	return user == userinfo.Username() && pass == requiredPassword
 }
 
-// Writes a response to the DoH client.
+// respondHTTPS writes a response to the DoH client.  d must not be nil.
 func (p *Proxy) respondHTTPS(d *DNSContext) (err error) {
 	resp := d.Res
 	w := d.HTTPResponseWriter

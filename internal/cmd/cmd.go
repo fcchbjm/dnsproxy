@@ -15,7 +15,7 @@ import (
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/osutil"
-	"github.com/fcchbjm/dnsproxy/internal/version"
+	"github.com/AdguardTeam/golibs/version"
 	"github.com/fcchbjm/dnsproxy/proxy"
 )
 
