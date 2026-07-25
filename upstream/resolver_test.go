@@ -26,6 +26,23 @@ func envOrDefault(k, def string) string {
 	return def
 }
 
+// skipIfRestrictedPublicDNSCrypt skips tests that need the public AdGuard
+// DNSCrypt endpoint when the AGENTS.md §8 restricted network profile is set.
+func skipIfRestrictedPublicDNSCrypt(t *testing.T) {
+	t.Helper()
+
+	if os.Getenv("DNSPROXY_TEST_UPSTREAMS") == "" {
+		return
+	}
+
+	v := strings.TrimSpace(os.Getenv("DNSPROXY_TEST_INCLUDE_ENCRYPTED"))
+	if strings.EqualFold(v, "1") || strings.EqualFold(v, "true") {
+		return
+	}
+
+	t.Skip("restricted network profile; set DNSPROXY_TEST_INCLUDE_ENCRYPTED=1 to enable public DNSCrypt tests")
+}
+
 func isNetworkTestsEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("DNSPROXY_ENABLE_NETWORK_TESTS")))
 	switch v {
@@ -134,24 +151,45 @@ func TestNewUpstreamResolver_validity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			r, err := upstream.NewUpstreamResolver(tc.addr, withTimeoutOpt)
-			if tc.wantErrMsg != "" {
-				assert.Equal(t, tc.wantErrMsg, err.Error())
-				if nberr := (&upstream.NotBootstrapError{}); errors.As(err, &nberr) {
-					assert.NotNil(t, r)
-				}
-
-				return
-			}
-
-			require.NoError(t, err)
-
-			addrs, err := r.LookupNetIP(context.Background(), "ip", testLookupHost)
-			require.NoError(t, err)
-
-			assert.NotEmpty(t, addrs)
+			runUpstreamResolverValidityCase(t, tc.name, tc.addr, tc.wantErrMsg, withTimeoutOpt, testLookupHost)
 		})
 	}
+}
+
+// runUpstreamResolverValidityCase exercises one NewUpstreamResolver validity
+// case.  name is the subtest name used for restricted-network skips.
+func runUpstreamResolverValidityCase(
+	t *testing.T,
+	name string,
+	addr string,
+	wantErrMsg string,
+	opts *upstream.Options,
+	lookupHost string,
+) {
+	t.Helper()
+
+	// Public DNSCrypt stamp is unreachable under the restricted network
+	// profile (AGENTS.md §8); plain/DoT/DoH use DNSPROXY_TEST_RESOLVER_IP.
+	if name == "sdns" {
+		skipIfRestrictedPublicDNSCrypt(t)
+	}
+
+	r, err := upstream.NewUpstreamResolver(addr, opts)
+	if wantErrMsg != "" {
+		assert.Equal(t, wantErrMsg, err.Error())
+		if nberr := (&upstream.NotBootstrapError{}); errors.As(err, &nberr) {
+			assert.NotNil(t, r)
+		}
+
+		return
+	}
+
+	require.NoError(t, err)
+
+	addrs, err := r.LookupNetIP(context.Background(), "ip", lookupHost)
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, addrs)
 }
 
 func TestCachingResolver_staleness(t *testing.T) {

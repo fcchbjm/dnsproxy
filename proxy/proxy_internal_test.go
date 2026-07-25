@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,8 +239,14 @@ func newTestUpstreamConfigWithBoot(
 	timeout time.Duration,
 	addrs ...string,
 ) (u *UpstreamConfig) {
+	// Honor AGENTS.md §8 domestic profile when set.
+	bootstrapAddr := "8.8.8.8:53"
+	if v := strings.TrimSpace(os.Getenv("DNSPROXY_TEST_BOOTSTRAP_1")); v != "" {
+		bootstrapAddr = v
+	}
+
 	googleRslv, err := upstream.NewUpstreamResolver(
-		"8.8.8.8:53",
+		bootstrapAddr,
 		&upstream.Options{
 			Logger:  testLogger,
 			Timeout: timeout,
@@ -688,6 +696,13 @@ func TestExchangeWithReservedDomains(t *testing.T) {
 func TestOneByOneUpstreamsExchange(t *testing.T) {
 	t.Parallel()
 
+	// Default Cloudflare; restricted networks override via DNSPROXY_TEST_RESOLVER_IP
+	// (AGENTS.md §8).
+	workingUpstream := "1.1.1.1"
+	if v := strings.TrimSpace(os.Getenv("DNSPROXY_TEST_RESOLVER_IP")); v != "" {
+		workingUpstream = v
+	}
+
 	dnsProxy := mustNew(t, &Config{
 		Logger:        testLogger,
 		UDPListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
@@ -697,7 +712,7 @@ func TestOneByOneUpstreamsExchange(t *testing.T) {
 			testTimeout,
 			"https://fake-dns.com/fake-dns-query",
 			"tls://fake-dns.com",
-			"1.1.1.1",
+			workingUpstream,
 		),
 		TrustedProxies: defaultTrustedProxies,
 		Fallbacks:      newTestUpstreamConfig(t, testTimeout, "1.2.3.4:567"),

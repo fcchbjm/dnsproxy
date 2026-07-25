@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"net/netip"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -98,6 +99,13 @@ func startTestDNSCryptServer(
 }
 
 func TestUpstreamDNSCrypt(t *testing.T) {
+	// Same restricted-network gate as DoT bootstrap tests (AGENTS.md §8).
+	if os.Getenv("DNSPROXY_TEST_UPSTREAMS") != "" &&
+		!strings.EqualFold(strings.TrimSpace(os.Getenv("DNSPROXY_TEST_INCLUDE_ENCRYPTED")), "1") &&
+		!strings.EqualFold(strings.TrimSpace(os.Getenv("DNSPROXY_TEST_INCLUDE_ENCRYPTED")), "true") {
+		t.Skip("restricted network profile; set DNSPROXY_TEST_INCLUDE_ENCRYPTED=1 to enable public DNSCrypt tests")
+	}
+
 	t.Parallel()
 
 	// AdGuard DNS (DNSCrypt)
