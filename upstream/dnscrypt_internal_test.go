@@ -200,7 +200,16 @@ func TestDNSCrypt_Exchange_deadline(t *testing.T) {
 	req := (&dns.Msg{}).SetQuestion("unit-test2.dns.adguard.com.", dns.TypeTXT)
 
 	res, err := u.Exchange(req)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	// With Timeout: 1ns, Dial-before-expiry returns os.ErrDeadlineExceeded
+	// (miekg conn deadlines); expiry-before-Dial returns context.DeadlineExceeded.
+	// Accept both until Exchange takes a context (TODO above).
+	require.True(
+		t,
+		errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, os.ErrDeadlineExceeded),
+		"want context or os deadline exceeded; got %v",
+		err,
+	)
 
 	assert.Nil(t, res)
 }
