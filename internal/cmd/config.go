@@ -148,6 +148,10 @@ type configuration struct {
 	// MaxGoRoutines is the maximum number of goroutines.
 	MaxGoRoutines uint `yaml:"max-go-routines"`
 
+	// MaxTCPConnections is the maximum number of concurrently accepted TCP/DoT
+	// connections.  Zero means unlimited (default).
+	MaxTCPConnections uint `yaml:"max-tcp-connections"`
+
 	// TLSMinVersion is the minimum allowed version of TLS.  When unset (0),
 	// standalone listeners default to TLS 1.2.
 	//
@@ -163,6 +167,10 @@ type configuration struct {
 	// the DoH listener) is allowed.  It does not skip TLS certificate
 	// verification; that is controlled by Insecure / --insecure.
 	DoHInsecureEnabled bool `yaml:"doh-insecure-enabled"`
+
+	// DoHMaxConcurrent is the maximum number of in-flight DoH requests.  Zero
+	// means unlimited (default).
+	DoHMaxConcurrent uint `yaml:"doh-max-concurrent"`
 
 	// help, if true, prints the command-line option help message and quit with
 	// a successful exit-code.
@@ -182,7 +190,8 @@ type configuration struct {
 	// Verbose controls the verbosity of the output.
 	Verbose bool `yaml:"verbose"`
 
-	// Insecure disables upstream servers TLS certificate verification.
+	// Insecure disables upstream servers TLS certificate verification for
+	// bootstrap, primary, fallback, and private-rdns upstreams.
 	Insecure bool `yaml:"insecure"`
 
 	// IPv6Disabled makes the server to respond with NODATA to all AAAA queries.
@@ -234,12 +243,18 @@ type configuration struct {
 	// ProxyProtocolV2ReadTimeout bounds how long dnsproxy waits for an incoming
 	// PPv2 preface and payload after accepting a TCP/TLS connection.
 	ProxyProtocolV2ReadTimeout timeutil.Duration `yaml:"proxy-protocol-v2-read-timeout"`
+
+	// TLSTimeout is the DoT handshake and idle read timeout.  Standalone
+	// default is 60s (see parseConfig).  Zero is not meaningful here because
+	// createProxyConfig always passes the configured duration into proxy.Config.
+	TLSTimeout timeutil.Duration `yaml:"tls-timeout"`
 }
 
-// parseConfig returns options parsed from the command args or config file.  If
-// no options have been parsed, it returns a suitable exit code and an error.
-func parseConfig() (conf *configuration, exitCode int, err error) {
-	conf = &configuration{
+// newDefaultConfiguration returns standalone dnsproxy defaults before CLI/YAML
+// overrides.  Zero-value fields that are intentionally unlimited (e.g. future
+// connection caps) stay unset here.
+func newDefaultConfiguration() (conf *configuration) {
+	return &configuration{
 		HTTPSServerName:            "dnsproxy",
 		UpstreamMode:               string(proxy.UpstreamModeLoadBalance),
 		CacheSizeBytes:             64 * 1024,
@@ -253,7 +268,16 @@ func parseConfig() (conf *configuration, exitCode int, err error) {
 		HostsFileEnabled:           true,
 		PendingRequestsEnabled:     true,
 		ProxyProtocolV2ReadTimeout: timeutil.Duration(3 * time.Second),
+		// Standalone DoT default is intentionally shorter than library
+		// [proxy.DefaultTLSTimeout] (600s) to limit idle connection occupancy.
+		TLSTimeout: timeutil.Duration(defaultTLSTimeout),
 	}
+}
+
+// parseConfig returns options parsed from the command args or config file.  If
+// no options have been parsed, it returns a suitable exit code and an error.
+func parseConfig() (conf *configuration, exitCode int, err error) {
+	conf = newDefaultConfiguration()
 
 	err = parseCmdLineOptions(conf)
 	exitCode, needExit := processCmdLineOptions(conf, err)

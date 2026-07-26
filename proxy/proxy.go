@@ -35,8 +35,13 @@ import (
 )
 
 const (
-	defaultTimeout      = 10 * time.Second
-	defaultTLSTimeout   = 600 * time.Second
+	defaultTimeout = 10 * time.Second
+
+	// DefaultTLSTimeout is the DoT handshake and idle-read timeout used when
+	// [Config.TLSTimeout] is zero.  Keep this long for embedders that rely on
+	// historical behavior; standalone dnsproxy sets a shorter default in cmd.
+	DefaultTLSTimeout = 600 * time.Second
+
 	defaultPPv2Timeout  = 3 * time.Second
 	minDNSPacketSize    = 12 + 5
 	defaultTCPKeepAlive = 30 * time.Second
@@ -76,6 +81,14 @@ type Proxy struct {
 	//
 	// See also: https://github.com/AdguardTeam/AdGuardHome/issues/2242.
 	requestsSema syncutil.Semaphore
+
+	// tcpConnsSema limits concurrently accepted TCP/DoT connections when
+	// [Config.MaxTCPConnections] is non-zero.  nil means unlimited.
+	tcpConnsSema chan struct{}
+
+	// dohReqSema limits in-flight DoH requests when
+	// [HTTPConfig.MaxConcurrentRequests] is non-zero.  nil means unlimited.
+	dohReqSema chan struct{}
 
 	// privateNets determines if the requested address and the client address
 	// are private.
@@ -253,6 +266,10 @@ func New(c *Config) (p *Proxy, err error) {
 
 	p.initRequestsSema()
 
+	p.initTCPConnsSema()
+
+	p.initDoHReqSema()
+
 	p.initFastestAddr()
 
 	p.initBindRetry(c)
@@ -269,6 +286,7 @@ func (p *Proxy) applyDefaults() {
 	p.CacheOptimisticAnswerTTL = cmp.Or(p.CacheOptimisticAnswerTTL, DefaultOptimisticAnswerTTL)
 	p.CacheOptimisticMaxAge = cmp.Or(p.CacheOptimisticMaxAge, DefaultOptimisticMaxAge)
 	p.ProxyProtocolV2ReadTimeout = cmp.Or(p.ProxyProtocolV2ReadTimeout, defaultPPv2Timeout)
+	p.TLSTimeout = cmp.Or(p.TLSTimeout, DefaultTLSTimeout)
 	p.UpstreamMode = cmp.Or(p.UpstreamMode, UpstreamModeLoadBalance)
 }
 
@@ -288,6 +306,75 @@ func (p *Proxy) initRequestsSema() {
 	}
 
 	p.requestsSema = syncutil.EmptySemaphore{}
+}
+
+func (p *Proxy) initTCPConnsSema() {
+	if p.MaxTCPConnections == 0 {
+		return
+	}
+
+	p.logger.Info("max tcp connections is set", "count", p.MaxTCPConnections)
+	p.tcpConnsSema = make(chan struct{}, p.MaxTCPConnections)
+}
+
+func (p *Proxy) tryHoldTCPConn() (ok bool) {
+	if p.tcpConnsSema == nil {
+		return true
+	}
+
+	select {
+	case p.tcpConnsSema <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Proxy) releaseTCPConn() {
+	if p.tcpConnsSema == nil {
+		return
+	}
+
+	select {
+	case <-p.tcpConnsSema:
+	default:
+	}
+}
+
+func (p *Proxy) initDoHReqSema() {
+	if p.HTTPConfig == nil || p.HTTPConfig.MaxConcurrentRequests == 0 {
+		return
+	}
+
+	p.logger.Info(
+		"max doh concurrent requests is set",
+		"count", p.HTTPConfig.MaxConcurrentRequests,
+	)
+	p.dohReqSema = make(chan struct{}, p.HTTPConfig.MaxConcurrentRequests)
+}
+
+func (p *Proxy) tryHoldDoHReq() (ok bool) {
+	if p.dohReqSema == nil {
+		return true
+	}
+
+	select {
+	case p.dohReqSema <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Proxy) releaseDoHReq() {
+	if p.dohReqSema == nil {
+		return
+	}
+
+	select {
+	case <-p.dohReqSema:
+	default:
+	}
 }
 
 func (p *Proxy) initFastestAddr() {
@@ -762,13 +849,14 @@ func (p *Proxy) Resolve(ctx context.Context, dctx *DNSContext) (err error) {
 
 	var ok bool
 	ok, err = p.replyFromUpstream(dctx)
+	ok, err = p.applyUpstreamResult(dctx, ok, err)
 
 	// Don't cache the responses having CD flag, just like Dnsmasq does.  It
 	// prevents the cache from being poisoned with unvalidated answers which may
 	// differ from validated ones.
 	//
 	// See https://github.com/imp/dnsmasq/blob/770bce967cfc9967273d0acfb3ea018fb7b17522/src/forward.c#L1169-L1172.
-	if cacheWorks && ok && !dctx.Res.CheckingDisabled {
+	if cacheWorks && ok && dctx.Res != nil && !dctx.Res.CheckingDisabled {
 		// Cache the response with DNSSEC RRs.
 		p.cacheResp(dctx)
 	}
@@ -783,6 +871,30 @@ func (p *Proxy) Resolve(ctx context.Context, dctx *DNSContext) (err error) {
 	dctx.scrub()
 
 	return err
+}
+
+// applyUpstreamResult applies RFC 7871 §7.3 ECS mismatch handling to an
+// upstream result.  On mismatch it clears Res and returns errECSMismatch when
+// err is nil.  Same [ecsMismatch] predicate as [Proxy.cacheResp] and pending.
+func (p *Proxy) applyUpstreamResult(
+	dctx *DNSContext,
+	ok bool,
+	err error,
+) (outOK bool, outErr error) {
+	if !ok || !ecsMismatch(dctx.ReqECS, dctx.Res) {
+		return ok, err
+	}
+
+	p.logger.Debug(
+		"dropping response; subnet mismatch",
+		"req_ecs", dctx.ReqECS,
+	)
+	dctx.Res = nil
+	if err == nil {
+		err = errECSMismatch
+	}
+
+	return false, err
 }
 
 // validateRequest returns a response for invalid request or nil if the request

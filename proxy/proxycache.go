@@ -89,18 +89,16 @@ func (p *Proxy) cacheResp(d *DNSContext) {
 
 	switch ecs, scope := ecsFromMsg(d.Res); {
 	case ecs != nil && d.ReqECS != nil:
-		ones, bits := ecs.Mask.Size()
+		_, bits := ecs.Mask.Size()
 		reqOnes, _ := d.ReqECS.Mask.Size()
 
 		// If FAMILY, SOURCE PREFIX-LENGTH, and SOURCE PREFIX-LENGTH bits of
 		// ADDRESS in the response don't match the non-zero fields in the
 		// corresponding query, the full response MUST be dropped.
 		//
-		// See RFC 7871 Section 7.3.
-		//
-		// TODO(a.meshkov):  The whole response MUST be dropped if ECS in it
-		// doesn't correspond.
-		if !ecs.IP.Mask(ecs.Mask).Equal(d.ReqECS.IP.Mask(d.ReqECS.Mask)) || ones != reqOnes {
+		// See RFC 7871 Section 7.3.  Pending followers use the same
+		// [ecsMismatch] check and return [errECSMismatch] instead of cloning.
+		if ecsMismatch(d.ReqECS, d.Res) {
 			p.logger.Debug(
 				"not caching response; subnet mismatch",
 				"ecs", ecs,

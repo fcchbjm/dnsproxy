@@ -3,9 +3,35 @@ package proxy
 import (
 	"net"
 
+	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/miekg/dns"
 )
+
+// errECSMismatch is returned when a response's EDNS Client Subnet does not
+// match the corresponding query per RFC 7871 Section 7.3.
+const errECSMismatch errors.Error = "ecs mismatch in response"
+
+// ecsMismatch reports whether resp must be dropped for caching and pending
+// sharing because its ECS SOURCE PREFIX-LENGTH / ADDRESS do not match reqECS.
+//
+// See RFC 7871 Section 7.3.  Returns false when reqECS is nil, resp is nil, or
+// resp carries no ECS option (server does not support ECS).
+func ecsMismatch(reqECS *net.IPNet, resp *dns.Msg) (mismatch bool) {
+	if reqECS == nil || resp == nil {
+		return false
+	}
+
+	ecs, _ := ecsFromMsg(resp)
+	if ecs == nil {
+		return false
+	}
+
+	ones, _ := ecs.Mask.Size()
+	reqOnes, _ := reqECS.Mask.Size()
+
+	return !ecs.IP.Mask(ecs.Mask).Equal(reqECS.IP.Mask(reqECS.Mask)) || ones != reqOnes
+}
 
 // ecsFromMsg returns the subnet from EDNS Client Subnet option of m if any.
 func ecsFromMsg(m *dns.Msg) (subnet *net.IPNet, scope int) {

@@ -31,6 +31,11 @@ import (
 // TODO(a.garipov):  Consider making configurable.
 const defaultHTTPTimeout = 10 * time.Second
 
+// defaultTLSTimeout is the standalone dnsproxy default for DoT handshake and
+// idle read.  Library embedders that leave [proxy.Config.TLSTimeout] zero still
+// get [proxy.DefaultTLSTimeout] (600s).
+const defaultTLSTimeout = 60 * time.Second
+
 // TODO(e.burkov):  Use a separate type for the YAML configuration file.
 
 // createProxyConfig initializes [proxy.Config].  l must not be nil.
@@ -64,12 +69,13 @@ func createProxyConfig(
 	}
 
 	httpConf := &proxy.HTTPConfig{
-		ServerHeader:    conf.HTTPSServerName,
-		Routes:          conf.DoHRoutes,
-		ReadTimeout:     defaultHTTPTimeout,
-		WriteTimeout:    defaultHTTPTimeout,
-		HTTP3Enabled:    conf.HTTP3,
-		InsecureEnabled: conf.DoHInsecureEnabled,
+		ServerHeader:          conf.HTTPSServerName,
+		Routes:                conf.DoHRoutes,
+		ReadTimeout:           defaultHTTPTimeout,
+		WriteTimeout:          defaultHTTPTimeout,
+		HTTP3Enabled:          conf.HTTP3,
+		InsecureEnabled:       conf.DoHInsecureEnabled,
+		MaxConcurrentRequests: conf.DoHMaxConcurrent,
 	}
 
 	if uiStr := conf.HTTPSUserinfo; uiStr != "" {
@@ -98,11 +104,13 @@ func createProxyConfig(
 		EnableEDNSClientSubnet:     conf.EnableEDNSSubnet,
 		UDPBufferSize:              conf.UDPBufferSize,
 		MaxGoroutines:              conf.MaxGoRoutines,
+		MaxTCPConnections:          conf.MaxTCPConnections,
 		UsePrivateRDNS:             conf.UsePrivateRDNS,
 		DNSSECEnabled:              conf.DNSSECEnabled,
 		TCPProxyProtocolV2Enabled:  conf.TCPProxyProtocolV2Enabled,
 		TLSProxyProtocolV2Enabled:  conf.TLSProxyProtocolV2Enabled,
 		ProxyProtocolV2ReadTimeout: time.Duration(conf.ProxyProtocolV2ReadTimeout),
+		TLSTimeout:                 time.Duration(conf.TLSTimeout),
 		PrivateSubnets:             netutil.SubnetSetFunc(netutil.IsLocallyServed),
 		RequestHandler:             ratelimitMw.Wrap(preMw.Wrap(proxy.DefaultHandler{})),
 		PendingRequests: &proxy.PendingRequestsConfig{
@@ -202,12 +210,7 @@ func (conf *configuration) initUpstreams(
 		return fmt.Errorf("parsing upstreams configuration: %w", err)
 	}
 
-	privateUpsOpts := &upstream.Options{
-		Logger:       l,
-		HTTPVersions: httpVersions,
-		Bootstrap:    boot,
-		Timeout:      min(defaultLocalTimeout, timeout),
-	}
+	privateUpsOpts := privateRDNSUpstreamOptions(l, httpVersions, boot, conf.Insecure, timeout)
 	privateUpstreams := loadServersList(conf.PrivateRDNSUpstreams)
 
 	private, err := proxy.ParseUpstreamsConfig(privateUpstreams, privateUpsOpts)
@@ -241,6 +244,24 @@ func (conf *configuration) initUpstreams(
 	config.UpstreamMode = proxy.UpstreamModeLoadBalance
 
 	return nil
+}
+
+// privateRDNSUpstreamOptions builds Options for private-rdns upstreams.  insecure
+// must match the standalone --insecure / Insecure flag used for primary upstreams.
+func privateRDNSUpstreamOptions(
+	l *slog.Logger,
+	httpVersions []upstream.HTTPVersion,
+	boot upstream.Resolver,
+	insecure bool,
+	timeout time.Duration,
+) (opts *upstream.Options) {
+	return &upstream.Options{
+		Logger:             l,
+		HTTPVersions:       httpVersions,
+		InsecureSkipVerify: insecure,
+		Bootstrap:          boot,
+		Timeout:            min(defaultLocalTimeout, timeout),
+	}
 }
 
 // initBootstrap initializes the [upstream.Resolver] for bootstrapping upstream

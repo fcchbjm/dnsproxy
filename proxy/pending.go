@@ -29,6 +29,11 @@ type pendingRequests interface {
 // interface.  It must be created with [newDefaultPendingRequests].
 type defaultPendingRequests struct {
 	storage *syncutil.Map[string, *pendingRequest]
+
+	// onFollowerWait, if non-nil, is called after a duplicate request has been
+	// registered and before the waiter blocks on finish.  Tests use it as a
+	// deterministic barrier; production leaves it nil.
+	onFollowerWait func()
 }
 
 // pendingRequest is a structure that stores the query state and result.
@@ -81,6 +86,10 @@ func (pr *defaultPendingRequests) queue(
 		return false, nil
 	}
 
+	if f := pr.onFollowerWait; f != nil {
+		f()
+	}
+
 	<-pending.finish
 
 	origDNSCtx := pending.cloneDNSCtx
@@ -90,6 +99,12 @@ func (pr *defaultPendingRequests) queue(
 	dctx.queryStatistics = origDNSCtx.queryStatistics
 	dctx.Upstream = origDNSCtx.Upstream
 	if origDNSCtx.Res != nil {
+		// Same RFC 7871 §7.3 gate as [Proxy.cacheResp]: do not share a response
+		// whose ECS does not match the request.
+		if ecsMismatch(dctx.ReqECS, origDNSCtx.Res) {
+			return loaded, errECSMismatch
+		}
+
 		// TODO(e.burkov):  Add cloner for DNS messages.
 		dctx.Res = origDNSCtx.Res.Copy().SetReply(dctx.Req)
 	}

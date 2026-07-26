@@ -73,6 +73,9 @@ const (
 	tcpProxyProtocolV2Idx
 	tlsProxyProtocolV2Idx
 	proxyProtocolV2ReadTimeoutIdx
+	tlsTimeoutIdx
+	maxTCPConnectionsIdx
+	dohMaxConcurrentIdx
 	dnssecEnabledIdx
 )
 
@@ -358,10 +361,11 @@ var commandLineOptions = []*commandLineOption{
 		valueType:   "",
 	},
 	insecureIdx: {
-		description: "Disable secure TLS certificate validation.",
-		long:        "insecure",
-		short:       "",
-		valueType:   "",
+		description: "Disable secure TLS certificate validation for upstreams, including " +
+			"bootstrap, primary, fallback, and private-rdns upstreams.",
+		long:      "insecure",
+		short:     "",
+		valueType: "",
 	},
 	ipv6DisabledIdx: {
 		description: "If specified, all AAAA requests will be replied with NoError RCode and " +
@@ -452,6 +456,28 @@ var commandLineOptions = []*commandLineOption{
 		short:       "",
 		valueType:   "duration",
 	},
+	tlsTimeoutIdx: {
+		description: "DoT handshake and idle read timeout. Standalone default is 60s; " +
+			"library embedders that leave proxy.Config.TLSTimeout zero keep 600s.",
+		long:      "tls-timeout",
+		short:     "",
+		valueType: "duration",
+	},
+	maxTCPConnectionsIdx: {
+		description: "Maximum concurrently accepted plain DNS-over-TCP and DoT connections. " +
+			"Zero means unlimited. Orthogonal to --max-go-routines.",
+		long:      "max-tcp-connections",
+		short:     "",
+		valueType: "uint",
+	},
+	dohMaxConcurrentIdx: {
+		description: "Maximum in-flight DoH requests (HTTP/1.1, HTTP/2, HTTP/3 via ServeHTTP). " +
+			"Zero means unlimited. Returns 429 when exceeded. Orthogonal to " +
+			"--max-go-routines and --max-tcp-connections.",
+		long:      "doh-max-concurrent",
+		short:     "",
+		valueType: "uint",
+	},
 	dnssecEnabledIdx: {
 		description: "Defines whether the proxy should set the DO bits in the upstream requests.",
 		long:        "dnssec",
@@ -524,6 +550,9 @@ func parseCmdLineOptions(conf *configuration) (err error) {
 		tcpProxyProtocolV2Idx:         &conf.TCPProxyProtocolV2Enabled,
 		tlsProxyProtocolV2Idx:         &conf.TLSProxyProtocolV2Enabled,
 		proxyProtocolV2ReadTimeoutIdx: &conf.ProxyProtocolV2ReadTimeout,
+		tlsTimeoutIdx:                 &conf.TLSTimeout,
+		maxTCPConnectionsIdx:          &conf.MaxTCPConnections,
+		dohMaxConcurrentIdx:           &conf.DoHMaxConcurrent,
 	} {
 		addOption(flags, fieldPtr, commandLineOptions[i])
 	}

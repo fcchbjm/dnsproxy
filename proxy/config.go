@@ -167,6 +167,13 @@ type Config struct {
 	// in a later major version, as it doesn't actually limit all goroutines.
 	MaxGoroutines uint
 
+	// MaxTCPConnections is the maximum number of concurrently accepted
+	// plain DNS-over-TCP and DoT connections.  Zero means unlimited.  This
+	// limit is applied right after Accept and is orthogonal to
+	// [Config.MaxGoroutines] / requestsSema (which gates in-flight DNS work
+	// after connection preparation).
+	MaxTCPConnections uint
+
 	// The size of the read buffer on the underlying socket.  Larger read
 	// buffers can handle larger bursts of requests before packets get dropped.
 	UDPBufferSize int
@@ -192,6 +199,11 @@ type Config struct {
 	//
 	// Zero value means using a built-in default.
 	ProxyProtocolV2ReadTimeout time.Duration
+
+	// TLSTimeout is the DoT (ProtoTLS) handshake deadline and idle read
+	// timeout.  Zero means [DefaultTLSTimeout] (600s) for embedder
+	// compatibility.  Standalone dnsproxy sets a shorter default via cmd.
+	TLSTimeout time.Duration
 
 	// DNSSECEnabled specifies if the proxy should set the DO bits in the
 	// upstream requests.
@@ -286,6 +298,13 @@ type HTTPConfig struct {
 
 	// InsecureEnabled specifies if unencrypted DoH requests are allowed.
 	InsecureEnabled bool
+
+	// MaxConcurrentRequests is the maximum number of in-flight DoH requests
+	// handled via [Proxy.ServeHTTP] (HTTP/1.1, HTTP/2, and HTTP/3 share this
+	// limit).  Zero means unlimited.  When the limit is reached, ServeHTTP
+	// responds with HTTP 429.  Orthogonal to [Config.MaxGoroutines] and
+	// [Config.MaxTCPConnections].
+	MaxConcurrentRequests uint
 }
 
 // validateConfig verifies that the supplied configuration is valid and returns
