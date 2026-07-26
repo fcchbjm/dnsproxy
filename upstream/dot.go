@@ -19,8 +19,8 @@ import (
 	"github.com/miekg/dns"
 )
 
-// dialTimeout is the global timeout for establishing a TLS connection.
-// TODO(ameshkov): use bootstrap timeout instead.
+// dialTimeout is the default DoT dial/exchange deadline when Options.Timeout
+// is unset (zero).
 const dialTimeout = 10 * time.Second
 
 // dnsOverTLS implements the [Upstream] interface for the DNS-over-TLS protocol.
@@ -41,6 +41,9 @@ type dnsOverTLS struct {
 	// logger is used for exchange logging.  It is never nil.
 	logger *slog.Logger
 
+	// timeout is the dial and per-exchange deadline.  It is always positive.
+	timeout time.Duration
+
 	// conns stores the connections ready for reuse.  Don't use [sync.Pool]
 	// here, since there is no need to deallocate these connections.
 	//
@@ -55,9 +58,15 @@ type dnsOverTLS struct {
 func newDoT(addr *url.URL, opts *Options) (ups Upstream, err error) {
 	addPort(addr, defaultPortDoT)
 
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = dialTimeout
+	}
+
 	tlsUps := &dnsOverTLS{
 		addr:      addr,
 		getDialer: newDialerInitializer(addr, opts),
+		timeout:   timeout,
 		tlsConf: &tls.Config{
 			ServerName:   addr.Hostname(),
 			RootCAs:      opts.RootCAs,
@@ -116,7 +125,7 @@ func (p *dnsOverTLS) Exchange(req *dns.Msg) (reply *dns.Msg, err error) {
 		p.logger.Debug("dot got bad conn from pool", "addr", p.addr, slogutil.KeyError, err)
 
 		// Retry.
-		conn, err = tlsDial(h, p.tlsConf.Clone())
+		conn, err = tlsDial(h, p.tlsConf.Clone(), p.timeout)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"dialing %s: connecting to %s: %w",
@@ -133,6 +142,11 @@ func (p *dnsOverTLS) Exchange(req *dns.Msg) (reply *dns.Msg, err error) {
 	}
 
 	p.putBack(conn)
+
+	err = validateResponse(req, reply)
+	if err != nil {
+		return nil, fmt.Errorf("validating response: %w", err)
+	}
 
 	return reply, nil
 }
@@ -161,7 +175,7 @@ func (p *dnsOverTLS) conn(h bootstrap.DialHandler) (conn net.Conn, err error) {
 	// Dial a new connection outside the lock, if needed.
 	defer func() {
 		if conn == nil {
-			conn, err = tlsDial(h, p.tlsConf.Clone())
+			conn, err = tlsDial(h, p.tlsConf.Clone(), p.timeout)
 			err = errors.Annotate(err, "connecting to %s: %w", p.tlsConf.ServerName)
 		}
 	}()
@@ -176,7 +190,7 @@ func (p *dnsOverTLS) conn(h bootstrap.DialHandler) (conn net.Conn, err error) {
 
 	p.conns, conn = p.conns[:l-1], p.conns[l-1]
 
-	err = conn.SetDeadline(time.Now().Add(dialTimeout))
+	err = conn.SetDeadline(time.Now().Add(p.timeout))
 	if err != nil {
 		p.logger.Debug("dot upstream setting deadline to conn from pool", slogutil.KeyError, err)
 
@@ -222,8 +236,8 @@ func (p *dnsOverTLS) exchangeWithConn(conn net.Conn, req *dns.Msg) (reply *dns.M
 }
 
 // tlsDial is basically the same as tls.DialWithDialer, but we will call our own
-// dialContext function to get connection.
-func tlsDial(dialContext bootstrap.DialHandler, conf *tls.Config) (c *tls.Conn, err error) {
+// dialContext function to get connection.  timeout must be positive.
+func tlsDial(dialContext bootstrap.DialHandler, conf *tls.Config, timeout time.Duration) (c *tls.Conn, err error) {
 	// We're using bootstrapped address instead of what's passed to the
 	// function.
 	rawConn, err := dialContext(context.Background(), networkTCP, "")
@@ -232,9 +246,9 @@ func tlsDial(dialContext bootstrap.DialHandler, conf *tls.Config) (c *tls.Conn, 
 	}
 
 	// We want the timeout to cover the whole process: TCP connection and TLS
-	// handshake dialTimeout will be used as connection deadLine.
+	// handshake; timeout is used as the connection deadline.
 	conn := tls.Client(rawConn, conf)
-	err = conn.SetDeadline(time.Now().Add(dialTimeout))
+	err = conn.SetDeadline(time.Now().Add(timeout))
 	if err != nil {
 		// Must not happen in normal circumstances.
 		panic(fmt.Errorf("dnsproxy: tls dial: setting deadline: %w", err))

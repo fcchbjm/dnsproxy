@@ -19,8 +19,17 @@ tcp-proxy-protocol-v2: false
 tls-proxy-protocol-v2: false
 # Timeout for reading Proxy Protocol v2 preface/payload on new TCP/TLS connections.
 proxy-protocol-v2-read-timeout: '3s'
+# Trusted proxy CIDRs for DoH client-IP headers and Proxy Protocol v2.
+# Default is empty (trust nobody). Behind an LB, list the LB/proxy CIDRs, e.g.:
+# trusted-proxies:
+#   - "10.0.0.0/8"
+#   - "192.168.0.0/16"
+trusted-proxies: []
 # Recommended default for PPv2 deployments; tune by host capacity.
 max-go-routines: 32
+# Minimum TLS version for DoT/DoH listeners when TLS certs are configured.
+# Default when unset: 1.2. Set explicitly to lower if required (e.g. 1.0).
+# tls-min-version: 1.2
 ratelimit: 0
 ratelimit-subnet-len-ipv4: 24
 ratelimit-subnet-len-ipv6: 64

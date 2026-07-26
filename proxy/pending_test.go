@@ -4,7 +4,9 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,32 +74,62 @@ func TestPendingRequests(t *testing.T) {
 
 	const reqsNum = 100
 
-	// workloadWG is used to hold the upstream response until as many requests
-	// as possible reach the [proxy.Resolve] method.  This is a best-effort
-	// approach, so it's not strictly guaranteed to hold all requests, but it
-	// works for the test.
-	workloadWG := &sync.WaitGroup{}
-	workloadWG.Add(reqsNum)
+	// arriveWG holds every handler at the same gate so they enter Resolve
+	// together.  The first upstream Exchange then waits until all handlers have
+	// started Resolve (and yields so waiters can join the pending queue) before
+	// answering — proving coalesce rather than racing Done-before-queue.
+	arriveWG := &sync.WaitGroup{}
+	arriveWG.Add(reqsNum)
+
+	var (
+		resolveStarted atomic.Int64
+		exchangeCount  atomic.Int64
+	)
 
 	reqHandler := &proxy.TestHandler{
 		OnHandle: func(ctx context.Context, p *proxy.Proxy, d *proxy.DNSContext) (err error) {
-			workloadWG.Done()
+			arriveWG.Done()
+			arriveWG.Wait()
+			resolveStarted.Add(1)
 
 			return p.Resolve(ctx, d)
 		},
 	}
 
-	once := &sync.Once{}
+	// Shared cacheable A RR: late leaders (if any) hit cache instead of a second
+	// upstream path.  Do not use PanicT.
+	var (
+		replyOnce sync.Once
+		reply     *dns.Msg
+	)
 	u := &dnsproxytest.Upstream{
 		OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
-			once.Do(func() {
-				resp = (&dns.Msg{}).SetReply(req)
+			exchangeCount.Add(1)
+
+			deadline := time.Now().Add(testTimeout)
+			for resolveStarted.Load() < reqsNum && time.Now().Before(deadline) {
+				runtime.Gosched()
+			}
+			// Let waiters progress from Resolve entry into pending.queue.
+			for range 256 {
+				runtime.Gosched()
+			}
+
+			replyOnce.Do(func() {
+				reply = (&dns.Msg{}).SetReply(req)
+				reply.Answer = []dns.RR{&dns.A{
+					Hdr: dns.RR_Header{
+						Name:   req.Question[0].Name,
+						Rrtype: dns.TypeA,
+						Class:  dns.ClassINET,
+						Ttl:    60,
+					},
+					A: net.IPv4(1, 2, 3, 4),
+				}}
 			})
 
-			// Only allow a single request to be processed.
-			require.NotNil(testutil.PanicT{}, resp)
-
-			workloadWG.Wait()
+			resp = reply.Copy()
+			resp.Id = req.Id
 
 			return resp, nil
 		},
@@ -150,6 +182,8 @@ func TestPendingRequests(t *testing.T) {
 	resolveWG.Wait()
 
 	require.NoError(t, errs[0])
+	// Within the coalesce window only one upstream exchange should occur.
+	require.Equal(t, int64(1), exchangeCount.Load())
 
 	for i, resp := range responses[:len(responses)-1] {
 		assert.Equal(t, errs[i], errs[i+1])

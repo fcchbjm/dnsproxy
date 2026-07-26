@@ -265,13 +265,29 @@ func newTestUpstreamConfigWithBoot(
 }
 
 // newTestUpstreamConfig creates a new UpstreamConfig with a single upstream
-// address and default timeout.
+// address and default timeout.  When DNSPROXY_TEST_RESOLVER_IP is set (AGENTS.md
+// §8), occurrences of [testDefaultUpstreamAddr] are rewritten to that host:53 so
+// restricted networks do not depend on 8.8.8.8 while still exercising a real
+// recursive hop.
 func newTestUpstreamConfig(
 	tb testing.TB,
 	timeout time.Duration,
 	addrs ...string,
 ) (u *UpstreamConfig) {
 	tb.Helper()
+
+	if v := strings.TrimSpace(os.Getenv("DNSPROXY_TEST_RESOLVER_IP")); v != "" {
+		replacement := net.JoinHostPort(v, "53")
+		rewritten := make([]string, len(addrs))
+		for i, a := range addrs {
+			if a == testDefaultUpstreamAddr {
+				rewritten[i] = replacement
+			} else {
+				rewritten[i] = a
+			}
+		}
+		addrs = rewritten
+	}
 
 	upsConf, err := ParseUpstreamsConfig(addrs, &upstream.Options{
 		Logger:  testLogger,

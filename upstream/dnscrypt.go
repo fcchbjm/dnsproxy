@@ -116,11 +116,26 @@ func (p *dnsCrypt) exchangeDNSCrypt(ctx context.Context, req *dns.Msg) (resp *dn
 
 		resp, err = tcpClient.ExchangeContext(ctx, req, resolverInfo)
 	}
-	if err == nil && resp != nil && resp.Id != req.Id {
-		err = dns.ErrId
+
+	return resp, checkDNSCryptResponse(req, resp, err)
+}
+
+// checkDNSCryptResponse validates the response ID and question section.
+func checkDNSCryptResponse(req, resp *dns.Msg, err error) (outErr error) {
+	if err != nil || resp == nil {
+		return err
 	}
 
-	return resp, err
+	if resp.Id != req.Id {
+		return dns.ErrId
+	}
+
+	err = validateResponse(req, resp)
+	if err != nil {
+		return fmt.Errorf("validating response: %w", err)
+	}
+
+	return nil
 }
 
 // resetClient renews the DNSCrypt client and server properties and also sets

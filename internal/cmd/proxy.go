@@ -91,13 +91,10 @@ func createProxyConfig(
 		CacheOptimisticMaxAge:    time.Duration(conf.OptimisticMaxAge),
 		CacheOptimistic:          conf.CacheOptimistic,
 		RefuseAny:                conf.RefuseAny,
-		// TODO(e.burkov):  The following CIDRs are aimed to match any address.
-		// This is not quite proper approach to be used by default so think
-		// about configuring it.
-		TrustedProxies: netutil.SliceSubnetSet{
-			netip.MustParsePrefix("0.0.0.0/0"),
-			netip.MustParsePrefix("::0/0"),
-		},
+		// Default: empty set - do not trust any direct peer for DoH client-IP
+		// headers or Proxy Protocol v2.  Operators behind an LB must set
+		// --trusted-proxies / trusted-proxies to the LB CIDRs explicitly.
+		TrustedProxies:             netutil.SliceSubnetSet{},
 		EnableEDNSClientSubnet:     conf.EnableEDNSSubnet,
 		UDPBufferSize:              conf.UDPBufferSize,
 		MaxGoroutines:              conf.MaxGoRoutines,
@@ -123,6 +120,7 @@ func createProxyConfig(
 	errs = append(errs, conf.initDNSCryptConfig(proxyConf))
 	errs = append(errs, conf.initListenAddrs(proxyConf))
 	errs = append(errs, conf.initSubnets(proxyConf))
+	errs = append(errs, conf.initTrustedProxies(proxyConf))
 
 	return proxyConf, errors.Join(errs...)
 }
@@ -555,6 +553,31 @@ func loadServersList(sources []string) []string {
 	}
 
 	return servers
+}
+
+// initTrustedProxies sets TrustedProxies from configuration.  Empty means no
+// peer is trusted for DoH forwarding headers or Proxy Protocol v2.
+func (conf *configuration) initTrustedProxies(proxyConf *proxy.Config) (err error) {
+	if len(conf.TrustedProxies) == 0 {
+		proxyConf.TrustedProxies = netutil.SliceSubnetSet{}
+
+		return nil
+	}
+
+	trusted := make([]netip.Prefix, 0, len(conf.TrustedProxies))
+	for i, s := range conf.TrustedProxies {
+		var pref netip.Prefix
+		pref, err = proxynetutil.ParseSubnet(s)
+		if err != nil {
+			return fmt.Errorf("parsing trusted proxy at index %d: %w", i, err)
+		}
+
+		trusted = append(trusted, pref)
+	}
+
+	proxyConf.TrustedProxies = netutil.SliceSubnetSet(trusted)
+
+	return nil
 }
 
 // hostsFiles returns the list of hosts files to resolve from.  It's empty if

@@ -223,9 +223,16 @@ func (p *dnsOverQUIC) Exchange(req *dns.Msg) (resp *dns.Msg, err error) {
 		// If we're unable to exchange messages, make sure the connection is
 		// closed and signal about an internal error.
 		p.closeConnWithError(conn, err)
+
+		return resp, err
 	}
 
-	return resp, err
+	err = validateResponse(req, resp)
+	if err != nil {
+		return nil, fmt.Errorf("validating response: %w", err)
+	}
+
+	return resp, nil
 }
 
 // Close implements the [Upstream] interface for *dnsOverQUIC.

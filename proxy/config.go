@@ -53,7 +53,8 @@ type Config struct {
 
 	// PendingRequests is used to mitigate the cache poisoning attacks by
 	// tracking identical requests and returning the same response for them,
-	// performing a single lookup.  If nil, it will be enabled by default.
+	// performing a single lookup.  If nil, or if Enabled is false, coalescing
+	// is disabled.  Standalone CLI sets Enabled explicitly when desired.
 	PendingRequests *PendingRequestsConfig
 
 	// RequestContext is a context constructor that returns contexts for

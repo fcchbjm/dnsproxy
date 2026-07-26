@@ -14,11 +14,14 @@ import (
 // Session ticket keys (RFC 5077) are initialized so clients can resume TLS
 // sessions per RFC 7858 Section 3.4.
 func newTLSConfig(conf *configuration) (c *tls.Config, err error) {
-	// Set default TLS min/max versions
-	tlsMinVersion := tls.VersionTLS10
+	// Default minimum is TLS 1.2 (ADV-004).  Operators may lower via
+	// --tls-min-version / tls-min-version (e.g. 1.0 or 1.1).
+	tlsMinVersion := tls.VersionTLS12
 	tlsMaxVersion := tls.VersionTLS13
 
 	switch conf.TLSMinVersion {
+	case 1.0:
+		tlsMinVersion = tls.VersionTLS10
 	case 1.1:
 		tlsMinVersion = tls.VersionTLS11
 	case 1.2:

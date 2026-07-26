@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -227,11 +228,14 @@ func TestProxy_tlsProxyProtocolV2_SlowConnCanBlockNextConn(t *testing.T) {
 	roots.AppendCertsFromPEM(caPem)
 	clientTLSConf := &tls.Config{ServerName: tlsServerName, RootCAs: roots}
 
+	// Controllable local upstream process: DefaultHandler still Resolve→Exchange
+	// over real DNS/TCP.  Keeps testTimeout / 700ms assertions meaningful without
+	// public recursive RTT (which previously caused ReadMsg i/o timeout flakes).
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
 		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
 		TLSConfig:                 serverConfig,
-		UpstreamConfig:            newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		UpstreamConfig:            newLocalPlainUpstreamConfig(t),
 		TrustedProxies:            defaultTrustedProxies,
 		TLSProxyProtocolV2Enabled: true,
 		MaxGoroutines:             1,
@@ -240,8 +244,9 @@ func TestProxy_tlsProxyProtocolV2_SlowConnCanBlockNextConn(t *testing.T) {
 
 	addr := dnsProxy.Addr(ProtoTLS).String()
 
-	// First connection occupies the only request slot by sending an incomplete
-	// PPv2 preface and stalling before request handling.
+	// First connection stalls in prepareConn (incomplete PPv2).  It must not
+	// hold requestsSema (acquired only after prepareConn) so the next peer can
+	// complete within the tight client deadline below.
 	slowConn, err := net.Dial("tcp", addr)
 	require.NoError(t, err)
 	defer func() { _ = slowConn.Close() }()
@@ -356,7 +361,7 @@ func TestProxy_tlsProxyProtocolV2_ProductionLikeConcurrentMix(t *testing.T) {
 		Logger:                    testLogger,
 		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
 		TLSConfig:                 serverConfig,
-		UpstreamConfig:            newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		UpstreamConfig:            newLocalPlainUpstreamConfig(t),
 		TrustedProxies:            defaultTrustedProxies,
 		TLSProxyProtocolV2Enabled: true,
 		MaxGoroutines:             1,
@@ -410,6 +415,37 @@ func TestProxy_tlsProxyProtocolV2_ProductionLikeConcurrentMix(t *testing.T) {
 	}
 
 	require.Less(t, maxElapsed, maxFastPeerElapsed, fmt.Sprintf("expected fast peers to complete under %v, max elapsed=%v", maxFastPeerElapsed, maxElapsed))
+}
+
+// newLocalPlainUpstreamConfig starts a localhost DNS server that answers A
+// queries with 8.8.8.8 and returns an UpstreamConfig targeting it over TCP.
+// Callers still exercise DefaultHandler → Resolve → Exchange; only the recursive
+// hop is replaced with a controllable local process.
+func newLocalPlainUpstreamConfig(tb testing.TB) (uc *UpstreamConfig) {
+	tb.Helper()
+
+	h := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := (&dns.Msg{}).SetReply(r)
+		if len(r.Question) == 1 && r.Question[0].Qtype == dns.TypeA {
+			m.Answer = append(m.Answer, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   r.Question[0].Name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    60,
+				},
+				A: net.IPv4(8, 8, 8, 8),
+			})
+		}
+		_ = w.WriteMsg(m)
+	})
+
+	addr := (&url.URL{
+		Scheme: string(ProtoTCP),
+		Host:   newLocalUpstreamListener(tb, 0, h).String(),
+	}).String()
+
+	return newTestUpstreamConfig(tb, defaultTimeout, addr)
 }
 
 func startSlowPPv2Peers(t *testing.T, addr string, peers int, holdDuration time.Duration) (conns []net.Conn) {

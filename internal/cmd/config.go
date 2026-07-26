@@ -89,6 +89,11 @@ type configuration struct {
 	// addresses.
 	PrivateSubnets []string `yaml:"private-subnets"`
 
+	// TrustedProxies is the list of CIDR networks whose direct peers may supply
+	// trusted client identity via DoH forwarding headers or Proxy Protocol v2.
+	// Empty (the default) means no peer is trusted.
+	TrustedProxies []string `yaml:"trusted-proxies"`
+
 	// BogusNXDomain transforms responses that contain at least one of the given
 	// IP addresses into NXDOMAIN.
 	//
@@ -123,7 +128,9 @@ type configuration struct {
 	// CacheSizeBytes is the cache size in bytes.  Default is 64k.
 	CacheSizeBytes int `yaml:"cache-size"`
 
-	// Ratelimit is the maximum number of requests per second.
+	// Ratelimit is the maximum number of requests per second.  Applies to UDP
+	// (ProtoUDP) only; DoH, DoT, and plain TCP DNS are not limited by this
+	// value.
 	Ratelimit uint `yaml:"ratelimit"`
 
 	// RatelimitSubnetLenIPv4 is a subnet length for IPv4 addresses used for
@@ -141,7 +148,8 @@ type configuration struct {
 	// MaxGoRoutines is the maximum number of goroutines.
 	MaxGoRoutines uint `yaml:"max-go-routines"`
 
-	// TLSMinVersion is the minimum allowed version of TLS.
+	// TLSMinVersion is the minimum allowed version of TLS.  When unset (0),
+	// standalone listeners default to TLS 1.2.
 	//
 	// TODO(d.kolyshev): Use more suitable type.
 	TLSMinVersion float32 `yaml:"tls-min-version"`
@@ -151,8 +159,9 @@ type configuration struct {
 	// TODO(d.kolyshev): Use more suitable type.
 	TLSMaxVersion float32 `yaml:"tls-max-version"`
 
-	// DoHInsecureEnabled controls whether the DoH server should skip TLS
-	// certificate verification.
+	// DoHInsecureEnabled controls whether unencrypted HTTP DoH (plain HTTP to
+	// the DoH listener) is allowed.  It does not skip TLS certificate
+	// verification; that is controlled by Insecure / --insecure.
 	DoHInsecureEnabled bool `yaml:"doh-insecure-enabled"`
 
 	// help, if true, prints the command-line option help message and quit with

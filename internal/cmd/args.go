@@ -37,6 +37,7 @@ const (
 	privateRDNSUpstreamsIdx
 	dns64PrefixIdx
 	privateSubnetsIdx
+	trustedProxiesIdx
 	bogusNXDomainIdx
 	hostsFilesIdx
 	timeoutIdx
@@ -222,6 +223,14 @@ var commandLineOptions = []*commandLineOption{
 		short:       "",
 		valueType:   "subnet",
 	},
+	trustedProxiesIdx: {
+		description: "Trusted proxy CIDRs for DoH client-IP headers and Proxy Protocol v2. " +
+			"Default is empty (trust nobody). Can be specified multiple times. " +
+			"LB/PPv2 deployments must set the load-balancer CIDRs explicitly.",
+		long:      "trusted-proxies",
+		short:     "",
+		valueType: "subnet",
+	},
 	bogusNXDomainIdx: {
 		description: "Transform the responses containing at least a single IP that matches " +
 			"specified addresses and CIDRs into NXDOMAIN.  Can be specified multiple times.",
@@ -274,10 +283,11 @@ var commandLineOptions = []*commandLineOption{
 		valueType:   "int",
 	},
 	ratelimitIdx: {
-		description: "Ratelimit (requests per second).",
-		long:        "ratelimit",
-		short:       "r",
-		valueType:   "int",
+		description: "Ratelimit (requests per second). Applies to UDP (ProtoUDP) only; " +
+			"DoH, DoT, and plain TCP DNS are not limited by this switch.",
+		long:      "ratelimit",
+		short:     "r",
+		valueType: "int",
 	},
 	ratelimitSubnetLenIPv4Idx: {
 		description: "Ratelimit subnet length for IPv4.",
@@ -306,7 +316,7 @@ var commandLineOptions = []*commandLineOption{
 		valueType: "uint",
 	},
 	tlsMinVersionIdx: {
-		description: "Minimum TLS version, for example 1.0.",
+		description: "Minimum TLS version, for example 1.2. Default: 1.2 when unset.",
 		long:        "tls-min-version",
 		short:       "",
 		valueType:   "version",
@@ -418,10 +428,11 @@ var commandLineOptions = []*commandLineOption{
 		valueType:   "route",
 	},
 	dohInsecureEnabledIdx: {
-		description: "If specified, the DoH server will skip TLS certificate verification.",
-		long:        "doh-insecure-enabled",
-		short:       "",
-		valueType:   "",
+		description: "Allow unencrypted HTTP DoH (plain HTTP to the DoH listener). " +
+			"Does not skip TLS certificate verification; use --insecure for that.",
+		long:      "doh-insecure-enabled",
+		short:     "",
+		valueType: "",
 	},
 	tcpProxyProtocolV2Idx: {
 		description: "If specified, plain DNS-over-TCP listeners require Proxy Protocol v2 headers.",
@@ -476,6 +487,7 @@ func parseCmdLineOptions(conf *configuration) (err error) {
 		privateRDNSUpstreamsIdx:       &conf.PrivateRDNSUpstreams,
 		dns64PrefixIdx:                &conf.DNS64Prefix,
 		privateSubnetsIdx:             &conf.PrivateSubnets,
+		trustedProxiesIdx:             &conf.TrustedProxies,
 		bogusNXDomainIdx:              &conf.BogusNXDomain,
 		hostsFilesIdx:                 &conf.HostsFiles,
 		timeoutIdx:                    &conf.Timeout,

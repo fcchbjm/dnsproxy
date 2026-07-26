@@ -94,9 +94,18 @@ PPv2 is injected by LB on the LB -> dnsproxy backend connection.
 
 #### Trust boundary (mandatory)
 
-- Configure `TrustedProxies` to only trusted LB/proxy CIDRs.
+Standalone `dnsproxy` defaults `TrustedProxies` to an **empty set** (trust nobody): DoH forwarding headers and Proxy Protocol v2 from a direct peer are **not** adopted unless that peer's address is listed.
+
+Configure explicitly for LB / reverse-proxy deployments:
+
+- CLI: `--trusted-proxies=10.0.0.0/8` (repeatable); same-host HAProxy → `127.0.0.0/8` (and `::1/128` if needed) — see the minimal fragment below
+- YAML: `trusted-proxies: ["10.0.0.0/8", ...]` (see `config.yaml.dist`)
+
+Also:
+
 - Restrict network access so only LB/proxy can reach PPv2-enabled listeners.
 - Do not accept client-provided PPv2 at the public edge (e.g. `accept-proxy` at boundary listeners), otherwise source address spoofing becomes possible.
+- Embedded hosts that construct `proxy.Config` themselves should pass a tight `TrustedProxies` set (often loopback-only behind a local reverse proxy).
 
 #### Minimal HAProxy fragment (DoT example)
 
@@ -109,7 +118,22 @@ backend bk_dnsproxy_dot_853
   server dnsproxy 127.0.0.1:853 send-proxy-v2
 ```
 
-Enable strict mode in dnsproxy with `--tls-proxy-protocol-v2` (and `--tcp-proxy-protocol-v2` if needed).
+On dnsproxy (same host as HAProxy, backend `127.0.0.1`), enable PPv2 **and** trust the loopback peer — empty `TrustedProxies` rejects even localhost:
+
+```text
+--tls-proxy-protocol-v2 --trusted-proxies=127.0.0.0/8
+```
+
+Add `--trusted-proxies=::1/128` if the backend dials over IPv6 loopback. For a remote LB, list that LB's CIDRs instead of loopback. Use `--tcp-proxy-protocol-v2` when plain TCP listeners also require PPv2.
+
+YAML equivalent:
+
+```yaml
+tls-proxy-protocol-v2: true
+trusted-proxies:
+  - "127.0.0.0/8"
+  # - "::1/128"   # if HAProxy connects via IPv6 loopback
+```
 
 #### DoQ/UDP and PPv2
 
@@ -163,6 +187,18 @@ In complex LB + encrypted DNS deployments, this project applies a dedicated conn
 
 - Server side (DoT/HTTPS): session ticket key initialized for resumption.
 - Upstream client side (DoH/DoQ/DoT): `ClientSessionCache` enabled to reduce repeated handshakes.
+
+### TLS minimum version default
+
+Standalone DoT/DoH listeners default to **TLS 1.2** when `tls-min-version` / `--tls-min-version` is unset. Lower explicitly (e.g. `1.0`) only if required for legacy clients.
+
+### Rate limiting scope
+
+`--ratelimit` / YAML `ratelimit` applies **only to UDP** (`ProtoUDP`). DoH, DoT, and plain TCP DNS are not constrained by the same switch.
+
+### `--doh-insecure-enabled` meaning
+
+Allows **unencrypted HTTP DoH** (plain HTTP to the DoH listener). It does **not** skip TLS certificate verification; use `--insecure` for that.
 
 ### Network-dependent tests
 
@@ -249,7 +285,7 @@ Usage of ./dnsproxy:
   --dnssec
         Defines whether the proxy should set the DO bits in the upstream requests.  Default: true.
   --doh-insecure-enabled
-        If specified, the DoH server will skip TLS certificate verification.
+        Allow unencrypted HTTP DoH (plain HTTP to the DoH listener). Does not skip TLS certificate verification; use --insecure for that.
   --doh-routes
         Routes for DNS-over-HTTPS.  If not specified, the default routes are registered:
         - "GET /", deprecated and will soon be removed,
@@ -311,7 +347,7 @@ Usage of ./dnsproxy:
   --quic-port=port/-q port
         Listening ports for DNS-over-QUIC.
   --ratelimit=int/-r int
-        Ratelimit (requests per second).
+        Ratelimit (requests per second). Applies to UDP (ProtoUDP) only; DoH, DoT, and plain TCP DNS are not limited by this switch.
   --ratelimit-subnet-len-ipv4=int
         Ratelimit subnet length for IPv4.
   --ratelimit-subnet-len-ipv6=int

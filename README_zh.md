@@ -95,13 +95,18 @@ docker pull ghcr.io/fcchbjm/dnsproxy:latest
 
 #### 信任边界（必须明确）
 
-PPv2 使代理层能够携带“其所见的客户端地址”。因此必须把 PPv2 的信任边界收紧到你的代理层：
+Standalone `dnsproxy` 默认将 `TrustedProxies` 设为 **空集**（不信任任何直连对端）：除非对端地址在可信列表中，否则不会采纳 DoH 转发头或 Proxy Protocol v2 中的客户端身份。
 
-- 配置 `TrustedProxies`（仅信任 LB/代理网段）；不在可信集合内的来源将不会被接受为有效的 PPv2 来源。
-- 在网络层（ACL/安全组/路由隔离）限制：只允许 LB/代理到达启用 PPv2 的监听端，避免直连与伪造风险。
-- 不要在公网入口接受来自客户端的 PPv2（例如在边界 listener 上启用 `accept-proxy` 一类配置），否则等同于允许客户端伪造源地址。
+LB / 反代部署须显式配置：
 
-`TrustedProxies` 的配置入口位于配置文件（见 `config.yaml.dist`）与对应的命令行参数解析逻辑中；建议在生产部署时将其收敛到 LB/代理所在的网段集合，并配合网络隔离使用。
+- CLI：`--trusted-proxies=10.0.0.0/8`（可重复）；同机 HAProxy → `127.0.0.0/8`（需要时再加 `::1/128`）——见下方最小示例
+- YAML：`trusted-proxies: ["10.0.0.0/8", ...]`（见 `config.yaml.dist`）
+
+同时：
+
+- 在网络层限制：只允许 LB/代理到达启用 PPv2 的监听端。
+- 不要在公网入口接受来自客户端的 PPv2（例如在边界 listener 上启用 `accept-proxy`），否则等同于允许伪造源地址。
+- 自行构造 `proxy.Config` 的嵌入宿主应将 `TrustedProxies` 收紧（常见为仅环回）。
 
 #### 5 分钟迁移：最小 HAProxy 配置片段
 
@@ -116,7 +121,23 @@ backend bk_dnsproxy_dot_853
   server dnsproxy 127.0.0.1:853 send-proxy-v2
 ```
 
-然后在 dnsproxy 启用严格模式开关：`--tls-proxy-protocol-v2`（如需 TCP 同理启用 `--tcp-proxy-protocol-v2`）。
+dnsproxy 与 HAProxy 同机、后端为 `127.0.0.1` 时，须同时开启 PPv2 **并**信任环回对端——默认空集 `TrustedProxies` 连 localhost 也不信任：
+
+```text
+--tls-proxy-protocol-v2 --trusted-proxies=127.0.0.0/8
+```
+
+若后端走 IPv6 环回，再加 `--trusted-proxies=::1/128`。远程 LB 则填写该 LB 的 CIDR，而非环回。纯 TCP 监听也需要 PPv2 时另加 `--tcp-proxy-protocol-v2`。
+
+YAML 等价：
+
+```yaml
+tls-proxy-protocol-v2: true
+trusted-proxies:
+  - "127.0.0.0/8"
+  # - "::1/128"   # 若 HAProxy 经 IPv6 环回连接
+```
+
 具体请参照 HAProxy 官方文档。
 
 #### DoQ（QUIC/UDP）与 PPv2：状态与讨论
@@ -177,6 +198,18 @@ QUIC/UDP 的语义与代价模型不同（逐包语义、地址验证、connecti
 
 - **作为 DoT/HTTPS 服务端**：初始化 session ticket key，使客户端能够按 TLS 机制恢复会话。
 - **作为 DoH/DoQ/DoT 上游客户端**：启用 `ClientSessionCache`，让与上游的 TLS 连接具备会话恢复能力，从而降低重复握手成本；与 HTTP/3 0-RTT/重连等路径协同工作。
+
+### TLS 最低版本默认
+
+Standalone 的 DoT/DoH 监听在未设置 `tls-min-version` / `--tls-min-version` 时默认 **TLS 1.2**。仅在确有遗留客户端需要时显式下调（例如 `1.0`）。
+
+### 限流作用域
+
+`--ratelimit` / YAML `ratelimit` **仅对 UDP**（`ProtoUDP`）生效。DoH、DoT 与纯 TCP DNS 不受同一开关约束。
+
+### `--doh-insecure-enabled` 含义
+
+允许 **无 TLS 的明文 HTTP DoH**（对 DoH 监听端使用普通 HTTP）。**不会**跳过 TLS 证书校验；证书跳过请用 `--insecure`。
 
 ### 模块名变更（构建与分发隔离）
 
@@ -260,7 +293,7 @@ Usage of ./dnsproxy:
   --config-path=path
         YAML configuration file. Minimal working configuration in config.yaml.dist. Options passed through command line will override the ones from this file.
   --doh-insecure-enabled
-        If specified, the DoH server will skip TLS certificate verification.
+        Allow unencrypted HTTP DoH (plain HTTP to the DoH listener). Does not skip TLS certificate verification; use --insecure for that.
   --doh-routes
         Routes for DNS-over-HTTPS.  If not specified, the default routes are registered:
         - "GET /", deprecated and will soon be removed,
@@ -322,7 +355,7 @@ Usage of ./dnsproxy:
   --quic-port=port/-q port
         Listening ports for DNS-over-QUIC.
   --ratelimit=int/-r int
-        Ratelimit (requests per second).
+        Ratelimit (requests per second). Applies to UDP (ProtoUDP) only; DoH, DoT, and plain TCP DNS are not limited by this switch.
   --ratelimit-subnet-len-ipv4=int
         Ratelimit subnet length for IPv4.
   --ratelimit-subnet-len-ipv6=int
