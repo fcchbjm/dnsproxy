@@ -19,6 +19,9 @@ tcp-proxy-protocol-v2: false
 tls-proxy-protocol-v2: false
 # Timeout for reading Proxy Protocol v2 preface/payload on new TCP/TLS connections.
 proxy-protocol-v2-read-timeout: '3s'
+# DoT handshake and idle read timeout. Standalone default is 60s (library zero
+# still means 600s for embedders). Shorten further under overload risk.
+tls-timeout: '60s'
 # Trusted proxy CIDRs for DoH client-IP headers and Proxy Protocol v2.
 # Default is empty (trust nobody). Behind an LB, list the LB/proxy CIDRs, e.g.:
 # trusted-proxies:
@@ -27,6 +30,13 @@ proxy-protocol-v2-read-timeout: '3s'
 trusted-proxies: []
 # Recommended default for PPv2 deployments; tune by host capacity.
 max-go-routines: 32
+# Optional hard cap on concurrent accepted TCP/DoT connections (0 = unlimited).
+# Orthogonal to max-go-routines. Public deployments: strongly consider setting
+# an explicit value (e.g. 512).
+# max-tcp-connections: 512
+# Optional hard cap on in-flight DoH requests via ServeHTTP (0 = unlimited).
+# Orthogonal to max-go-routines / max-tcp-connections. Public: e.g. 256.
+# doh-max-concurrent: 256
 # Minimum TLS version for DoT/DoH listeners when TLS certs are configured.
 # Default when unset: 1.2. Set explicitly to lower if required (e.g. 1.0).
 # tls-min-version: 1.2

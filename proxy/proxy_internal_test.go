@@ -239,7 +239,7 @@ func newTestUpstreamConfigWithBoot(
 	timeout time.Duration,
 	addrs ...string,
 ) (u *UpstreamConfig) {
-	// Honor AGENTS.md §8 domestic profile when set.
+	// Prefer DNSPROXY_TEST_BOOTSTRAP_1 when set (restricted-network tests).
 	bootstrapAddr := "8.8.8.8:53"
 	if v := strings.TrimSpace(os.Getenv("DNSPROXY_TEST_BOOTSTRAP_1")); v != "" {
 		bootstrapAddr = v
@@ -265,8 +265,8 @@ func newTestUpstreamConfigWithBoot(
 }
 
 // newTestUpstreamConfig creates a new UpstreamConfig with a single upstream
-// address and default timeout.  When DNSPROXY_TEST_RESOLVER_IP is set (AGENTS.md
-// §8), occurrences of [testDefaultUpstreamAddr] are rewritten to that host:53 so
+// address and default timeout.  When DNSPROXY_TEST_RESOLVER_IP is set,
+// occurrences of [testDefaultUpstreamAddr] are rewritten to that host:53 so
 // restricted networks do not depend on 8.8.8.8 while still exercising a real
 // recursive hop.
 func newTestUpstreamConfig(
@@ -712,8 +712,7 @@ func TestExchangeWithReservedDomains(t *testing.T) {
 func TestOneByOneUpstreamsExchange(t *testing.T) {
 	t.Parallel()
 
-	// Default Cloudflare; restricted networks override via DNSPROXY_TEST_RESOLVER_IP
-	// (AGENTS.md §8).
+	// Default Cloudflare; restricted networks override via DNSPROXY_TEST_RESOLVER_IP.
 	workingUpstream := "1.1.1.1"
 	if v := strings.TrimSpace(os.Getenv("DNSPROXY_TEST_RESOLVER_IP")); v != "" {
 		workingUpstream = v
@@ -754,7 +753,7 @@ func TestOneByOneUpstreamsExchange(t *testing.T) {
 	elapsed := time.Since(start)
 	// Upper bound: sequential tries each bounded by testTimeout, plus RTT to the
 	// working upstream and -race / scheduler jitter.  3×testTimeout matched ideal
-	// timing only and flaked under -race (see AGENTS.md §5).
+	// timing only and flaked under -race.
 	assert.Greater(t, 10*testTimeout, elapsed)
 }
 

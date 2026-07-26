@@ -99,7 +99,8 @@ func startTestDNSCryptServer(
 }
 
 func TestUpstreamDNSCrypt(t *testing.T) {
-	// Same restricted-network gate as DoT bootstrap tests (AGENTS.md §8).
+	// Same restricted-network gate as DoT bootstrap tests
+	// (DNSPROXY_TEST_UPSTREAMS without DNSPROXY_TEST_INCLUDE_ENCRYPTED).
 	if os.Getenv("DNSPROXY_TEST_UPSTREAMS") != "" &&
 		!strings.EqualFold(strings.TrimSpace(os.Getenv("DNSPROXY_TEST_INCLUDE_ENCRYPTED")), "1") &&
 		!strings.EqualFold(strings.TrimSpace(os.Getenv("DNSPROXY_TEST_INCLUDE_ENCRYPTED")), "true") {

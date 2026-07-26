@@ -121,10 +121,10 @@ backend bk_dnsproxy_dot_853
 On dnsproxy (same host as HAProxy, backend `127.0.0.1`), enable PPv2 **and** trust the loopback peer — empty `TrustedProxies` rejects even localhost:
 
 ```text
---tls-proxy-protocol-v2 --trusted-proxies=127.0.0.0/8
+--tls-proxy-protocol-v2 --trusted-proxies=127.0.0.0/8 --max-tcp-connections=512
 ```
 
-Add `--trusted-proxies=::1/128` if the backend dials over IPv6 loopback. For a remote LB, list that LB's CIDRs instead of loopback. Use `--tcp-proxy-protocol-v2` when plain TCP listeners also require PPv2.
+Add `--trusted-proxies=::1/128` if the backend dials over IPv6 loopback. For a remote LB, list that LB's CIDRs instead of loopback. Use `--tcp-proxy-protocol-v2` when plain TCP listeners also require PPv2. `--max-tcp-connections=512` matches the dist comment example; public deployments should set an explicit cap (0 = unlimited).
 
 YAML equivalent:
 
@@ -133,6 +133,8 @@ tls-proxy-protocol-v2: true
 trusted-proxies:
   - "127.0.0.0/8"
   # - "::1/128"   # if HAProxy connects via IPv6 loopback
+# Public / DoT behind LB: set an explicit Accept cap (0 = unlimited).
+max-tcp-connections: 512
 ```
 
 #### DoQ/UDP and PPv2
@@ -164,10 +166,14 @@ In complex LB + encrypted DNS deployments, this project applies a dedicated conn
 ### TLS timeout behavior (DoT)
 
 - Scope: DoT inbound connections (`--tls-port` / `ProtoTLS`).
-- Default: `defaultTLSTimeout = 600s` (compile-time default, not exposed as CLI/YAML yet).
+- Config: `--tls-timeout` / YAML `tls-timeout`.
+- Defaults (dual-layer, same pattern as TrustedProxies):
+  - **Library / embedders**: `proxy.Config.TLSTimeout` zero → **600s** (`DefaultTLSTimeout`).
+  - **Standalone `dnsproxy`**: explicit default **60s** (`config.yaml.dist` / cmd seed). This is an intentional break from the historical 600s binary default.
 - Behavior:
   - DoT idle window uses read deadline (not full deadline).
   - TLS handshake has explicit deadline to avoid indefinite connection occupancy.
+- Tuning: shorten further on public DoT under overload risk; raise only when idle keep-alive longer than 60s is required.
 
 ### TCP Keep-Alive (TCP/DoT)
 
@@ -192,13 +198,25 @@ In complex LB + encrypted DNS deployments, this project applies a dedicated conn
 
 Standalone DoT/DoH listeners default to **TLS 1.2** when `tls-min-version` / `--tls-min-version` is unset. Lower explicitly (e.g. `1.0`) only if required for legacy clients.
 
+### DoT idle / handshake timeout default
+
+Standalone defaults `--tls-timeout` / `tls-timeout` to **60s**. Embedders that leave `proxy.Config.TLSTimeout` unset keep **600s**. See [TLS timeout behavior (DoT)](#tls-timeout-behavior-dot).
+
+### Max TCP/DoT connections (opt-in)
+
+`--max-tcp-connections` / `max-tcp-connections` caps concurrently **accepted** plain TCP and DoT connections right after `Accept` (before request handling). **Default 0 = unlimited** (library and standalone). Orthogonal to `--max-go-routines` (in-flight DNS work). Public deployments should set an explicit value (e.g. `512`); see `config.yaml.dist`.
+
+### DoH max concurrent requests (opt-in)
+
+`--doh-max-concurrent` / `doh-max-concurrent` caps in-flight DoH work in `Proxy.ServeHTTP` (HTTP/1.1, HTTP/2, and HTTP/3 share the limit). **Default 0 = unlimited**. At capacity the handler returns **HTTP 429** with `Retry-After: 1`. Orthogonal to `--max-go-routines` and `--max-tcp-connections`. Public deployments should set an explicit value (e.g. `256`); see `config.yaml.dist`. Embedders that only register `ServeHTTP` on their own `http.Server` get the same limit when `HTTPConfig.MaxConcurrentRequests` is set.
+
 ### Rate limiting scope
 
 `--ratelimit` / YAML `ratelimit` applies **only to UDP** (`ProtoUDP`). DoH, DoT, and plain TCP DNS are not constrained by the same switch.
 
 ### `--doh-insecure-enabled` meaning
 
-Allows **unencrypted HTTP DoH** (plain HTTP to the DoH listener). It does **not** skip TLS certificate verification; use `--insecure` for that.
+Allows **unencrypted HTTP DoH** (plain HTTP to the DoH listener). It does **not** skip TLS certificate verification; use `--insecure` for that. `--insecure` also applies to private-rdns upstreams (aligned with primary/fallback).
 
 ### Network-dependent tests
 

@@ -719,3 +719,177 @@ func makeProxyProtocolV2RawHeader(verCmd, famProto byte, payload []byte) (hdr []
 
 	return hdr
 }
+
+func TestProxy_TLSTimeout_defaultZero(t *testing.T) {
+	t.Parallel()
+
+	p := mustNew(t, &Config{
+		Logger:         testLogger,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
+		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: defaultTrustedProxies,
+	})
+	require.Equal(t, DefaultTLSTimeout, p.TLSTimeout)
+}
+
+func TestProxy_TLSTimeout_shortIdleCloses(t *testing.T) {
+	t.Parallel()
+
+	const idle = 200 * time.Millisecond
+
+	serverConfig, caPem := newTLSConfig(t)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPem)
+	clientTLSConf := &tls.Config{ServerName: tlsServerName, RootCAs: roots}
+
+	dnsProxy := mustNew(t, &Config{
+		Logger:         testLogger,
+		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSConfig:      serverConfig,
+		TLSTimeout:     idle,
+		UpstreamConfig: newLocalPlainUpstreamConfig(t),
+		TrustedProxies: defaultTrustedProxies,
+	})
+	require.Equal(t, idle, dnsProxy.TLSTimeout)
+	servicetest.RequireRun(t, dnsProxy, testTimeout)
+
+	rawConn, err := net.Dial("tcp", dnsProxy.Addr(ProtoTLS).String())
+	require.NoError(t, err)
+	defer func() { _ = rawConn.Close() }()
+
+	tlsConn := tls.Client(rawConn, clientTLSConf)
+	require.NoError(t, tlsConn.SetDeadline(time.Now().Add(testTimeout)))
+	require.NoError(t, tlsConn.Handshake())
+	require.NoError(t, tlsConn.SetDeadline(time.Time{}))
+
+	start := time.Now()
+	require.NoError(t, tlsConn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	buf := make([]byte, 1)
+	_, err = tlsConn.Read(buf)
+	require.Error(t, err)
+
+	elapsed := time.Since(start)
+	require.GreaterOrEqual(t, elapsed, idle)
+	require.Less(t, elapsed, idle+time.Second)
+}
+
+func TestProxy_MaxTCPConnections_rejectsWhenFull(t *testing.T) {
+	t.Parallel()
+
+	dnsProxy := mustNew(t, &Config{
+		Logger:            testLogger,
+		TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		UpstreamConfig:    newLocalPlainUpstreamConfig(t),
+		TrustedProxies:    defaultTrustedProxies,
+		MaxTCPConnections: 1,
+	})
+	servicetest.RequireRun(t, dnsProxy, testTimeout)
+
+	addr := dnsProxy.Addr(ProtoTCP).String()
+
+	hold, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = hold.Close() }()
+
+	excess, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = excess.Close() }()
+
+	require.NoError(t, excess.SetDeadline(time.Now().Add(testTimeout)))
+	_, err = excess.Read(make([]byte, 1))
+	require.Error(t, err)
+
+	require.NoError(t, hold.Close())
+
+	require.Eventually(t, func() bool {
+		conn, dialErr := dns.Dial("tcp", addr)
+		if dialErr != nil {
+			return false
+		}
+		defer func() { _ = conn.Close() }()
+
+		req := newTestMessage()
+		if writeErr := conn.WriteMsg(req); writeErr != nil {
+			return false
+		}
+
+		_ = conn.SetDeadline(time.Now().Add(testTimeout))
+		res, readErr := conn.ReadMsg()
+		if readErr != nil {
+			return false
+		}
+
+		requireResponse(t, req, res)
+
+		return true
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestProxy_MaxTCPConnections_tlsRejectsWhenFull(t *testing.T) {
+	t.Parallel()
+
+	serverConfig, caPem := newTLSConfig(t)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPem)
+	clientTLSConf := &tls.Config{ServerName: tlsServerName, RootCAs: roots}
+
+	dnsProxy := mustNew(t, &Config{
+		Logger:            testLogger,
+		TLSListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSConfig:         serverConfig,
+		UpstreamConfig:    newLocalPlainUpstreamConfig(t),
+		TrustedProxies:    defaultTrustedProxies,
+		MaxTCPConnections: 1,
+	})
+	servicetest.RequireRun(t, dnsProxy, testTimeout)
+
+	addr := dnsProxy.Addr(ProtoTLS).String()
+
+	holdRaw, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = holdRaw.Close() }()
+
+	holdTLS := tls.Client(holdRaw, clientTLSConf)
+	require.NoError(t, holdTLS.SetDeadline(time.Now().Add(testTimeout)))
+	require.NoError(t, holdTLS.Handshake())
+	require.NoError(t, holdTLS.SetDeadline(time.Time{}))
+
+	excessRaw, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer func() { _ = excessRaw.Close() }()
+
+	require.NoError(t, excessRaw.SetDeadline(time.Now().Add(testTimeout)))
+	_, err = excessRaw.Read(make([]byte, 1))
+	require.Error(t, err)
+
+	require.NoError(t, holdTLS.Close())
+
+	require.Eventually(t, func() bool {
+		raw, dialErr := net.Dial("tcp", addr)
+		if dialErr != nil {
+			return false
+		}
+		defer func() { _ = raw.Close() }()
+
+		tlsConn := tls.Client(raw, clientTLSConf)
+		_ = tlsConn.SetDeadline(time.Now().Add(testTimeout))
+		if hsErr := tlsConn.Handshake(); hsErr != nil {
+			return false
+		}
+
+		conn := &dns.Conn{Conn: tlsConn}
+		req := newTestMessage()
+		if writeErr := conn.WriteMsg(req); writeErr != nil {
+			return false
+		}
+
+		res, readErr := conn.ReadMsg()
+		if readErr != nil {
+			return false
+		}
+
+		requireResponse(t, req, res)
+
+		return true
+	}, 2*time.Second, 5*time.Millisecond)
+}

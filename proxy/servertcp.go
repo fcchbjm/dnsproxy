@@ -144,6 +144,18 @@ func (p *Proxy) tcpPacketLoop(
 			break
 		}
 
+		if !p.tryHoldTCPConn() {
+			p.logger.DebugContext(
+				ctx,
+				"max tcp connections reached; closing",
+				"proto", proto,
+				"raddr", clientConn.RemoteAddr(),
+			)
+			_ = clientConn.Close()
+
+			continue
+		}
+
 		go p.handleTCPConnection(ctx, clientConn, proto, reqSema)
 	}
 }
@@ -157,6 +169,7 @@ func (p *Proxy) handleTCPConnection(
 	reqSema syncutil.Semaphore,
 ) {
 	defer slogutil.RecoverAndLog(ctx, p.logger)
+	defer p.releaseTCPConn()
 
 	var shutdownOnce sync.Once
 	clientInitiatedClose := false
@@ -237,17 +250,17 @@ func (p *Proxy) setTCPKeepAlive(ctx context.Context, conn net.Conn) {
 
 // setConnReadOrFullDeadline sets the proper deadline for TCP/TLS connections.
 func (p *Proxy) setConnReadOrFullDeadline(ctx context.Context, conn net.Conn, proto Proto) {
-	err := setTCPReadOrFullDeadline(conn, proto)
+	err := p.setTCPReadOrFullDeadline(conn, proto)
 	if err != nil {
 		logWithNonCrit(ctx, err, tcpDeadlineMsg(proto), proto, p.logger)
 	}
 }
 
-func setTCPReadOrFullDeadline(conn net.Conn, proto Proto) (err error) {
+func (p *Proxy) setTCPReadOrFullDeadline(conn net.Conn, proto Proto) (err error) {
 	if proto == ProtoTLS {
 		// DoT: read deadline only so outbound responses are not tied to the idle
 		// read window (avoids premature full-deadline shutdown vs long-lived clients).
-		return conn.SetReadDeadline(time.Now().Add(defaultTLSTimeout))
+		return conn.SetReadDeadline(time.Now().Add(p.TLSTimeout))
 	}
 
 	return conn.SetDeadline(time.Now().Add(defaultTimeout))
@@ -340,7 +353,7 @@ func (p *Proxy) setInitialReadDeadline(
 ) {
 	timeout := defaultTimeout
 	if proto == ProtoTLS {
-		timeout = defaultTLSTimeout
+		timeout = p.TLSTimeout
 	}
 
 	if ppEnabled && timeout > p.ProxyProtocolV2ReadTimeout {
@@ -396,7 +409,7 @@ func validateProxyProtocolV2Policy(ppEnabled, hasHeader bool) (err error) {
 }
 
 func (p *Proxy) prepareTLSConn(ctx context.Context, conn net.Conn) (tlsConn *tls.Conn, err error) {
-	err = conn.SetDeadline(time.Now().Add(defaultTLSTimeout))
+	err = conn.SetDeadline(time.Now().Add(p.TLSTimeout))
 	if err != nil {
 		logWithNonCrit(ctx, err, "setting tls handshake deadline", ProtoTLS, p.logger)
 	}

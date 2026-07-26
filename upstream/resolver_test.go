@@ -27,7 +27,8 @@ func envOrDefault(k, def string) string {
 }
 
 // skipIfRestrictedPublicDNSCrypt skips tests that need the public AdGuard
-// DNSCrypt endpoint when the AGENTS.md §8 restricted network profile is set.
+// DNSCrypt endpoint when DNSPROXY_TEST_UPSTREAMS is set and
+// DNSPROXY_TEST_INCLUDE_ENCRYPTED is not enabled.
 func skipIfRestrictedPublicDNSCrypt(t *testing.T) {
 	t.Helper()
 
@@ -168,8 +169,9 @@ func runUpstreamResolverValidityCase(
 ) {
 	t.Helper()
 
-	// Public DNSCrypt stamp is unreachable under the restricted network
-	// profile (AGENTS.md §8); plain/DoT/DoH use DNSPROXY_TEST_RESOLVER_IP.
+	// Public DNSCrypt stamp is unreachable when DNSPROXY_TEST_UPSTREAMS is set
+	// without DNSPROXY_TEST_INCLUDE_ENCRYPTED; plain/DoT/DoH use
+	// DNSPROXY_TEST_RESOLVER_IP instead.
 	if name == "sdns" {
 		skipIfRestrictedPublicDNSCrypt(t)
 	}

@@ -12,7 +12,9 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
@@ -464,4 +466,202 @@ func createTestHTTPClient(dnsProxy *Proxy, caPem []byte, http3Enabled bool) (cli
 		Transport: transport,
 		Timeout:   defaultTimeout,
 	}
+}
+
+func TestProxy_DoHMaxConcurrentRequests(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unlimited_zero", func(t *testing.T) {
+		t.Parallel()
+
+		tlsConf, caPem := newTLSConfig(t)
+		dnsProxy := mustNew(t, &Config{
+			Logger:         testLogger,
+			TLSConfig:      tlsConf,
+			TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+			UpstreamConfig: newLocalPlainUpstreamConfig(t),
+			TrustedProxies: defaultTrustedProxies,
+			RequestHandler: &TestHandler{
+				OnHandle: func(_ context.Context, p *Proxy, d *DNSContext) (err error) {
+					d.Res = replyWithTestA(d.Req)
+
+					return nil
+				},
+			},
+			HTTPConfig: &HTTPConfig{
+				ListenAddresses:       []netip.AddrPort{localhostAnyPort},
+				MaxConcurrentRequests: 0,
+			},
+		})
+		servicetest.RequireRun(t, dnsProxy, testTimeout)
+
+		client := createTestHTTPClient(dnsProxy, caPem, false)
+		msg := newTestMessage()
+		status, resp := doTestDoHRequest(t, client, msg)
+		require.Equal(t, http.StatusOK, status)
+		requireResponse(t, msg, resp)
+	})
+
+	t.Run("rejects_when_full", func(t *testing.T) {
+		t.Parallel()
+
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var startOnce sync.Once
+
+		tlsConf, caPem := newTLSConfig(t)
+		dnsProxy := mustNew(t, &Config{
+			Logger:         testLogger,
+			TLSConfig:      tlsConf,
+			TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+			UpstreamConfig: newLocalPlainUpstreamConfig(t),
+			TrustedProxies: defaultTrustedProxies,
+			RequestHandler: &TestHandler{
+				OnHandle: func(ctx context.Context, _ *Proxy, d *DNSContext) (err error) {
+					startOnce.Do(func() { close(started) })
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+
+					d.Res = replyWithTestA(d.Req)
+
+					return nil
+				},
+			},
+			HTTPConfig: &HTTPConfig{
+				ListenAddresses:       []netip.AddrPort{localhostAnyPort},
+				MaxConcurrentRequests: 1,
+			},
+		})
+		servicetest.RequireRun(t, dnsProxy, testTimeout)
+
+		client := createTestHTTPClient(dnsProxy, caPem, false)
+		msg := newTestMessage()
+
+		type dohResult struct {
+			resp   *dns.Msg
+			status int
+			err    error
+		}
+		firstDone := make(chan dohResult, 1)
+		go func() {
+			status, resp, err := tryDoHRequest(client, msg)
+			firstDone <- dohResult{status: status, resp: resp, err: err}
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("first DoH request did not enter handler")
+		}
+
+		status, _, err := tryDoHRequest(client, newTestMessage())
+		require.NoError(t, err)
+		require.Equal(t, http.StatusTooManyRequests, status)
+
+		close(release)
+
+		var first dohResult
+		select {
+		case first = <-firstDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("first DoH request did not finish after release")
+		}
+		require.NoError(t, first.err)
+		require.Equal(t, http.StatusOK, first.status)
+		requireResponse(t, msg, first.resp)
+
+		status, resp, err := tryDoHRequest(client, newTestMessage())
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+		require.NotNil(t, resp)
+		require.Len(t, resp.Answer, 1)
+	})
+}
+
+// replyWithTestA returns a successful reply with a single A record for tests
+// that short-circuit Resolve.
+func replyWithTestA(req *dns.Msg) (resp *dns.Msg) {
+	resp = (&dns.Msg{}).SetReply(req)
+	if len(req.Question) != 1 {
+		return resp
+	}
+
+	resp.Answer = append(resp.Answer, &dns.A{
+		Hdr: dns.RR_Header{
+			Name:   req.Question[0].Name,
+			Rrtype: dns.TypeA,
+			Class:  dns.ClassINET,
+			Ttl:    60,
+		},
+		A: net.IPv4(8, 8, 8, 8),
+	})
+
+	return resp
+}
+
+// doTestDoHRequest sends m over DoH and returns the HTTP status and, when the
+// body is a DNS message, the unpacked response.
+func doTestDoHRequest(t *testing.T, client *http.Client, m *dns.Msg) (status int, resp *dns.Msg) {
+	t.Helper()
+
+	status, resp, err := tryDoHRequest(client, m)
+	require.NoError(t, err)
+	if status == http.StatusTooManyRequests {
+		return status, nil
+	}
+
+	return status, resp
+}
+
+// tryDoHRequest is like [doTestDoHRequest] but returns an error instead of
+// failing the test (safe to call from a worker goroutine).
+func tryDoHRequest(client *http.Client, m *dns.Msg) (status int, resp *dns.Msg, err error) {
+	packed, err := m.Pack()
+	if err != nil {
+		return 0, nil, err
+	}
+
+	u := url.URL{
+		Scheme:   "https",
+		Host:     tlsServerName,
+		Path:     "/dns-query",
+		RawQuery: fmt.Sprintf("dns=%s", base64.RawURLEncoding.EncodeToString(packed)),
+	}
+
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+
+	httpResp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = httpResp.Body.Close() }()
+
+	status = httpResp.StatusCode
+	if status == http.StatusTooManyRequests {
+		if got := httpResp.Header.Get("Retry-After"); got != "1" {
+			return status, nil, fmt.Errorf("Retry-After: got %q, want 1", got)
+		}
+
+		return status, nil, nil
+	}
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return status, nil, err
+	}
+
+	resp = &dns.Msg{}
+	if err = resp.Unpack(body); err != nil {
+		return status, nil, err
+	}
+
+	return status, resp, nil
 }

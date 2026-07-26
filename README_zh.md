@@ -124,10 +124,10 @@ backend bk_dnsproxy_dot_853
 dnsproxy 与 HAProxy 同机、后端为 `127.0.0.1` 时，须同时开启 PPv2 **并**信任环回对端——默认空集 `TrustedProxies` 连 localhost 也不信任：
 
 ```text
---tls-proxy-protocol-v2 --trusted-proxies=127.0.0.0/8
+--tls-proxy-protocol-v2 --trusted-proxies=127.0.0.0/8 --max-tcp-connections=512
 ```
 
-若后端走 IPv6 环回，再加 `--trusted-proxies=::1/128`。远程 LB 则填写该 LB 的 CIDR，而非环回。纯 TCP 监听也需要 PPv2 时另加 `--tcp-proxy-protocol-v2`。
+若后端走 IPv6 环回，再加 `--trusted-proxies=::1/128`。远程 LB 则填写该 LB 的 CIDR，而非环回。纯 TCP 监听也需要 PPv2 时另加 `--tcp-proxy-protocol-v2`。`--max-tcp-connections=512` 与 dist 注释示例一致；公网请显式设置上限（0 = 不限制）。
 
 YAML 等价：
 
@@ -136,6 +136,8 @@ tls-proxy-protocol-v2: true
 trusted-proxies:
   - "127.0.0.0/8"
   # - "::1/128"   # 若 HAProxy 经 IPv6 环回连接
+# 公网 / LB 后置 DoT：请显式设置 Accept 上限（0 = 不限制）。
+max-tcp-connections: 512
 ```
 
 具体请参照 HAProxy 官方文档。
@@ -168,10 +170,14 @@ QUIC/UDP 的语义与代价模型不同（逐包语义、地址验证、connecti
 本项目为 DoT（DNS-over-TLS）连接引入独立的超时语义，使其更贴合长连接复用与 LB 后置场景下的连接生命周期。
 
 - **作用域**：仅影响 DoT（`--tls-port` / `ProtoTLS`）入口连接。
-- **默认值**：`defaultTLSTimeout = 600s`（当前为编译期默认值，尚未暴露为 CLI/YAML）。
+- **配置**：`--tls-timeout` / YAML `tls-timeout`。
+- **默认值（双层，与 TrustedProxies 同构）**：
+  - **库 / 嵌入宿主**：`proxy.Config.TLSTimeout` 为零 → **600s**（`DefaultTLSTimeout`），保持嵌入兼容。
+  - **Standalone `dnsproxy`**：显式默认 **60s**（`config.yaml.dist` / cmd 种子）。相对历史二进制默认 600s，这是**有意破坏**，请写入发行说明。
 - **关键语义**：
   - DoT 在 idle 期间采用 **read deadline**（而非 full deadline），避免把响应写入绑定到空闲读窗口，导致长连接在边界条件下被过早 teardown。
   - TLS 握手阶段也有显式 deadline，避免“连接建立但不发送数据”长期占用连接处理协程与资源。
+- **调参**：公网 DoT / 过载风险下可再缩短；仅当确实需要长于 60s 的空闲保活时再调高。
 - **如何验证**：使用 DoT 长连接复用（或通过 LB 复用到后端），观察连接空闲时的超时行为与关闭阶段是否仍能完成在途请求/响应。
 
 ### TCP Keep-Alive（TCP/DoT）
@@ -203,13 +209,25 @@ QUIC/UDP 的语义与代价模型不同（逐包语义、地址验证、connecti
 
 Standalone 的 DoT/DoH 监听在未设置 `tls-min-version` / `--tls-min-version` 时默认 **TLS 1.2**。仅在确有遗留客户端需要时显式下调（例如 `1.0`）。
 
+### DoT 空闲 / 握手超时默认
+
+Standalone 将 `--tls-timeout` / `tls-timeout` 默认设为 **60s**。嵌入宿主未设置 `proxy.Config.TLSTimeout` 时仍为 **600s**。详见上文「TLS 专用超时（DoT）」。
+
+### TCP/DoT 连接上限（opt-in）
+
+`--max-tcp-connections` / `max-tcp-connections` 在 `Accept` 之后、请求处理之前限制并发 **已接受** 的明文 TCP 与 DoT 连接。**默认 0 = 不限制**（库与 Standalone 相同）。与 `--max-go-routines`（在途 DNS 处理）正交。公网部署建议显式设置（例如 `512`）；见 `config.yaml.dist`。
+
+### DoH 并发上限（opt-in）
+
+`--doh-max-concurrent` / `doh-max-concurrent` 限制 `Proxy.ServeHTTP` 上的在途 DoH（HTTP/1.1 / HTTP/2 / HTTP/3 共用）。**默认 0 = 不限制**。满额返回 **HTTP 429** 并带 `Retry-After: 1`。与 `--max-go-routines`、`--max-tcp-connections` 正交。公网建议显式设置（例如 `256`）；见 `config.yaml.dist`。嵌入宿主若只把 `ServeHTTP` 挂到自管 `http.Server`，只要设置了 `HTTPConfig.MaxConcurrentRequests` 即同样生效。
+
 ### 限流作用域
 
 `--ratelimit` / YAML `ratelimit` **仅对 UDP**（`ProtoUDP`）生效。DoH、DoT 与纯 TCP DNS 不受同一开关约束。
 
 ### `--doh-insecure-enabled` 含义
 
-允许 **无 TLS 的明文 HTTP DoH**（对 DoH 监听端使用普通 HTTP）。**不会**跳过 TLS 证书校验；证书跳过请用 `--insecure`。
+允许 **无 TLS 的明文 HTTP DoH**（对 DoH 监听端使用普通 HTTP）。**不会**跳过 TLS 证书校验；证书跳过请用 `--insecure`。`--insecure` 同样作用于 private-rdns 上游（与主上游 / fallback 对齐）。
 
 ### 模块名变更（构建与分发隔离）
 

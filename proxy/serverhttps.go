@@ -204,7 +204,9 @@ func newDoHReq(
 //   - http.StatusBadRequest if there is no DNS request data,
 //   - http.StatusUnsupportedMediaType if request content type is not
 //     "application/dns-message",
-//   - http.StatusMethodNotAllowed if request method is not GET or POST.
+//   - http.StatusMethodNotAllowed if request method is not GET or POST,
+//   - http.StatusTooManyRequests if [HTTPConfig.MaxConcurrentRequests] is
+//     exceeded (with Retry-After: 1 when set).
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ctx, cancel := p.reqCtx.New(ctx)
@@ -250,6 +252,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			raddr = prx
 		}
 	}
+
+	if !p.tryHoldDoHReq() {
+		w.Header().Set(httphdr.RetryAfter, "1")
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+
+		return
+	}
+	defer p.releaseDoHReq()
 
 	d := p.newDNSContext(ProtoHTTPS, req, raddr)
 	d.HTTPRequest = r
