@@ -263,7 +263,7 @@ func newDefaultConfiguration() (conf *configuration) {
 		OptimisticAnswerTTL:        timeutil.Duration(proxy.DefaultOptimisticAnswerTTL),
 		OptimisticMaxAge:           timeutil.Duration(proxy.DefaultOptimisticMaxAge),
 		RatelimitSubnetLenIPv4:     24,
-		RatelimitSubnetLenIPv6:     56,
+		RatelimitSubnetLenIPv6:     64,
 		DNSSECEnabled:              true,
 		HostsFileEnabled:           true,
 		PendingRequestsEnabled:     true,

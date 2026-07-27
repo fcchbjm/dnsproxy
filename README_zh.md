@@ -225,6 +225,8 @@ Standalone 将 `--tls-timeout` / `tls-timeout` 默认设为 **60s**。嵌入宿�
 
 `--ratelimit` / YAML `ratelimit` **仅对 UDP**（`ProtoUDP`）生效。DoH、DoT 与纯 TCP DNS 不受同一开关约束。
 
+Standalone 默认 `ratelimit-subnet-len-ipv6` 为 **64**（与 `config.yaml.dist` 一致）；升级时若此前依赖隐式 **56** 且未显式配置该选项，IPv6 限流聚合会更细——需在 YAML/CLI 中显式设回以保留旧行为。
+
 ### `--doh-insecure-enabled` 含义
 
 允许 **无 TLS 的明文 HTTP DoH**（对 DoH 监听端使用普通 HTTP）。**不会**跳过 TLS 证书校验；证书跳过请用 `--insecure`。`--insecure` 同样作用于 private-rdns 上游（与主上游 / fallback 对齐）。

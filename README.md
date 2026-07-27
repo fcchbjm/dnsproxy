@@ -214,6 +214,8 @@ Standalone defaults `--tls-timeout` / `tls-timeout` to **60s**. Embedders that l
 
 `--ratelimit` / YAML `ratelimit` applies **only to UDP** (`ProtoUDP`). DoH, DoT, and plain TCP DNS are not constrained by the same switch.
 
+Standalone default `ratelimit-subnet-len-ipv6` is **64** (aligned with `config.yaml.dist`); upgrades that relied on the previous implicit **56** without setting the knob get finer IPv6 rate-limit aggregation—set YAML/CLI explicitly to keep the old behavior.
+
 ### `--doh-insecure-enabled` meaning
 
 Allows **unencrypted HTTP DoH** (plain HTTP to the DoH listener). It does **not** skip TLS certificate verification; use `--insecure` for that. `--insecure` also applies to private-rdns upstreams (aligned with primary/fallback).

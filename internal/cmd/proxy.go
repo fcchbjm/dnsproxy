@@ -203,7 +203,10 @@ func (conf *configuration) initUpstreams(
 		Bootstrap:          boot,
 		Timeout:            timeout,
 	}
-	upstreams := loadServersList(conf.Upstreams)
+	upstreams, err := loadNamedServersList(conf.Upstreams, "upstreams list")
+	if err != nil {
+		return err
+	}
 
 	config.UpstreamConfig, err = proxy.ParseUpstreamsConfig(upstreams, upsOpts)
 	if err != nil {
@@ -211,37 +214,66 @@ func (conf *configuration) initUpstreams(
 	}
 
 	privateUpsOpts := privateRDNSUpstreamOptions(l, httpVersions, boot, conf.Insecure, timeout)
-	privateUpstreams := loadServersList(conf.PrivateRDNSUpstreams)
-
-	private, err := proxy.ParseUpstreamsConfig(privateUpstreams, privateUpsOpts)
+	config.PrivateRDNSUpstreamConfig, err = loadOptionalUpstreamConfig(
+		conf.PrivateRDNSUpstreams,
+		privateUpsOpts,
+		"private rdns upstreams list",
+		"private rdns upstreams configuration",
+	)
 	if err != nil {
-		return fmt.Errorf("parsing private rdns upstreams configuration: %w", err)
+		return err
 	}
 
-	if !isEmpty(private) {
-		config.PrivateRDNSUpstreamConfig = private
-	}
-
-	fallbackUpstreams := loadServersList(conf.Fallbacks)
-	fallbacks, err := proxy.ParseUpstreamsConfig(fallbackUpstreams, upsOpts)
+	config.Fallbacks, err = loadOptionalUpstreamConfig(
+		conf.Fallbacks,
+		upsOpts,
+		"fallback upstreams list",
+		"fallback upstreams configuration",
+	)
 	if err != nil {
-		return fmt.Errorf("parsing fallback upstreams configuration: %w", err)
+		return err
 	}
 
-	if !isEmpty(fallbacks) {
-		config.Fallbacks = fallbacks
+	return applyUpstreamMode(config, conf.UpstreamMode)
+}
+
+// loadOptionalUpstreamConfig loads and parses an upstream list.  Empty configs
+// are returned as nil so callers can assign the result directly.
+func loadOptionalUpstreamConfig(
+	sources []string,
+	opts *upstream.Options,
+	loadWhat, parseWhat string,
+) (uc *proxy.UpstreamConfig, err error) {
+	servers, err := loadNamedServersList(sources, loadWhat)
+	if err != nil {
+		return nil, err
 	}
 
-	if conf.UpstreamMode != "" {
-		err = config.UpstreamMode.UnmarshalText([]byte(conf.UpstreamMode))
-		if err != nil {
-			return fmt.Errorf("parsing upstream mode: %w", err)
-		}
+	uc, err = proxy.ParseUpstreamsConfig(servers, opts)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", parseWhat, err)
+	}
+
+	if isEmpty(uc) {
+		return nil, nil
+	}
+
+	return uc, nil
+}
+
+// applyUpstreamMode sets config.UpstreamMode from the configured string, or
+// load-balance when empty.
+func applyUpstreamMode(config *proxy.Config, mode string) (err error) {
+	if mode == "" {
+		config.UpstreamMode = proxy.UpstreamModeLoadBalance
 
 		return nil
 	}
 
-	config.UpstreamMode = proxy.UpstreamModeLoadBalance
+	err = config.UpstreamMode.UnmarshalText([]byte(mode))
+	if err != nil {
+		return fmt.Errorf("parsing upstream mode: %w", err)
+	}
 
 	return nil
 }
@@ -545,32 +577,76 @@ func (conf *configuration) initPrivateSubnets(proxyConf *proxy.Config) (err erro
 // loadServersList loads a list of DNS servers from the specified list.  The
 // thing is that the user may specify either a server address or the path to a
 // file with a list of addresses.  This method takes care of it, it reads the
-// file and loads servers from this file if needed.
-func loadServersList(sources []string) []string {
-	var servers []string
+// file and loads servers from this file if needed.  An existing path that
+// cannot be read as a list file is an error; a missing path is treated as a
+// server address.
+// loadNamedServersList loads a servers list and wraps load errors with what.
+func loadNamedServersList(sources []string, what string) (servers []string, err error) {
+	servers, err = loadServersList(sources)
+	if err != nil {
+		return nil, fmt.Errorf("loading %s: %w", what, err)
+	}
 
+	return servers, nil
+}
+
+func loadServersList(sources []string) (servers []string, err error) {
 	for _, source := range sources {
-		// #nosec G304 -- Trust the file path that is given in the
-		// configuration.
-		data, err := os.ReadFile(source)
+		var added []string
+		added, err = appendServersFromSource(source)
 		if err != nil {
-			// Ignore errors, just consider it a server address and not a file.
-			servers = append(servers, source)
+			return nil, err
 		}
 
-		// TODO(a.garipov):  Be smarter about bytes vs. strings.
-		for line := range strings.SplitSeq(string(data), "\n") {
-			line = strings.TrimSpace(line)
+		servers = append(servers, added...)
+	}
 
-			// Ignore comments in the file.
-			if line == "" ||
-				strings.HasPrefix(line, "!") ||
-				strings.HasPrefix(line, "#") {
-				continue
-			}
+	return servers, nil
+}
 
-			servers = append(servers, line)
+// appendServersFromSource treats source as a file path when it exists, or as a
+// literal server address when the path does not exist.  Other read/stat errors
+// are returned.
+func appendServersFromSource(source string) (added []string, err error) {
+	// #nosec G304 -- Trust the file path that is given in the configuration.
+	data, readErr := os.ReadFile(source)
+	if readErr != nil {
+		return serversFromReadError(source, readErr)
+	}
+
+	return parseServerFileLines(string(data)), nil
+}
+
+// serversFromReadError decides whether a failed ReadFile means a literal
+// address (path does not exist) or a hard error (stat/read failure).
+func serversFromReadError(source string, readErr error) (added []string, err error) {
+	_, statErr := os.Stat(source)
+	if errors.Is(statErr, os.ErrNotExist) {
+		return []string{source}, nil
+	}
+
+	if statErr != nil {
+		return nil, fmt.Errorf("accessing servers list %q: %w", source, statErr)
+	}
+
+	return nil, fmt.Errorf("reading servers list %q: %w", source, readErr)
+}
+
+// parseServerFileLines returns non-empty, non-comment lines from a servers
+// list file body.
+func parseServerFileLines(data string) (servers []string) {
+	// TODO(a.garipov):  Be smarter about bytes vs. strings.
+	for line := range strings.SplitSeq(data, "\n") {
+		line = strings.TrimSpace(line)
+
+		// Ignore comments in the file.
+		if line == "" ||
+			strings.HasPrefix(line, "!") ||
+			strings.HasPrefix(line, "#") {
+			continue
 		}
+
+		servers = append(servers, line)
 	}
 
 	return servers

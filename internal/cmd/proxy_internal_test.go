@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -56,6 +58,7 @@ func TestCreateProxyConfig_TLSTimeout(t *testing.T) {
 		conf := newDefaultConfiguration()
 		assert.Equal(t, defaultTLSTimeout, time.Duration(conf.TLSTimeout))
 		assert.Equal(t, 60*time.Second, time.Duration(conf.TLSTimeout))
+		assert.Equal(t, uint(64), conf.RatelimitSubnetLenIPv6)
 
 		// Fields required for createProxyConfig; do not override TLSTimeout.
 		conf.HostsFileEnabled = false
@@ -84,5 +87,41 @@ func TestCreateProxyConfig_TLSTimeout(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, proxyConf)
 		assert.Equal(t, custom, proxyConf.TLSTimeout)
+	})
+}
+
+func TestLoadServersList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing_path_as_address", func(t *testing.T) {
+		t.Parallel()
+
+		addr := "127.0.0.1:53"
+		servers, err := loadServersList([]string{addr})
+		require.NoError(t, err)
+		assert.Equal(t, []string{addr}, servers)
+	})
+
+	t.Run("existing_file", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "upstreams.txt")
+		content := "1.1.1.1:53\n# comment\n8.8.8.8:53\n"
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+		servers, err := loadServersList([]string{path})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"1.1.1.1:53", "8.8.8.8:53"}, servers)
+	})
+
+	t.Run("existing_directory_errors", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		servers, err := loadServersList([]string{dir})
+		require.Error(t, err)
+		assert.Nil(t, servers)
+		assert.Contains(t, err.Error(), "reading servers list")
 	})
 }

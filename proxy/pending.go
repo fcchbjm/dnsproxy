@@ -16,8 +16,10 @@ import (
 type pendingRequests interface {
 	// queue is called for each request.  It returns false if there are no
 	// identical requests in progress.  Otherwise it blocks until the first
-	// request is completed and returns the error that occurred during its
-	// resolution.
+	// request is completed, or until ctx is canceled.  On cancel it returns
+	// loaded=true and ctx.Err(); the caller must not call done.  On a completed
+	// peer it returns loaded=true and the error that occurred during that
+	// peer's resolution (which may be nil).
 	queue(ctx context.Context, dctx *DNSContext) (loaded bool, err error)
 
 	// done must be called after the request is completed, if queue returned
@@ -90,7 +92,20 @@ func (pr *defaultPendingRequests) queue(
 		f()
 	}
 
-	<-pending.finish
+	select {
+	case <-pending.finish:
+		// Peer finished; clone / ECS gate below.
+	case <-ctx.Done():
+		// ctx and finish may both be ready in the same window. Prefer the peer
+		// result so followers do not discard a completed response as cancel.
+		select {
+		case <-pending.finish:
+			// Fall through to clone / ECS path.
+		default:
+			// Follower canceled: do not Delete/close the pending entry.
+			return true, ctx.Err()
+		}
+	}
 
 	origDNSCtx := pending.cloneDNSCtx
 
