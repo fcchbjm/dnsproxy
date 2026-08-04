@@ -219,6 +219,10 @@ Enabling both `--cache-optimistic` / `cache-optimistic` and `--hosts-file-enable
 
 `--ratelimit` / YAML `ratelimit` applies **only to UDP** (`ProtoUDP`). DoH, DoT, and plain TCP DNS are not constrained by the same switch.
 
+`--ratelimit-max-size` / `ratelimit-max-size` caps how many per-subnet UDP rate-limit buckets are kept (Standalone default **10000**); when full, the oldest bucket is evicted so multi-source scans cannot grow the map without bound.
+
+Embedders that construct `ratelimit.Config` / `NewMiddleware` directly must set **`MaxSize > 0`** (e.g. `ratelimit.DefaultMaxSize`); zero fails validation.
+
 Standalone default `ratelimit-subnet-len-ipv6` is **64** (aligned with `config.yaml.dist`); upgrades that relied on the previous implicit **56** without setting the knob get finer IPv6 rate-limit aggregation—set YAML/CLI explicitly to keep the old behavior.
 
 ### `--doh-insecure-enabled` meaning
@@ -377,6 +381,8 @@ Usage of ./dnsproxy:
         Ratelimit subnet length for IPv4.
   --ratelimit-subnet-len-ipv6=int
         Ratelimit subnet length for IPv6.
+  --ratelimit-max-size=uint
+        Max per-subnet UDP ratelimit buckets (oldest evicted when full). Default: 10000. Applies only when --ratelimit is positive.
   --refuse-any
         If specified, refuses ANY requests.
   --timeout=duration

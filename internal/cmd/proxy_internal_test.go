@@ -13,6 +13,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/timeutil"
+	"github.com/fcchbjm/dnsproxy/ratelimit"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,7 @@ func TestCreateProxyConfig_TLSTimeout(t *testing.T) {
 		assert.Equal(t, defaultTLSTimeout, time.Duration(conf.TLSTimeout))
 		assert.Equal(t, 60*time.Second, time.Duration(conf.TLSTimeout))
 		assert.Equal(t, uint(64), conf.RatelimitSubnetLenIPv6)
+		assert.Equal(t, uint(ratelimit.DefaultMaxSize), conf.RatelimitMaxSize)
 
 		// Fields required for createProxyConfig; do not override TLSTimeout.
 		conf.HostsFileEnabled = false

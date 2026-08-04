@@ -77,6 +77,7 @@ func TestLookupNetIP_withRatelimit(t *testing.T) {
 	rlMw := ratelimit.NewMiddleware(&ratelimit.Config{
 		Logger:        logger,
 		Ratelimit:     1,
+		MaxSize:       ratelimit.DefaultMaxSize,
 		SubnetLenIPv4: 24,
 		SubnetLenIPv6: 64,
 	})

@@ -421,8 +421,8 @@ func (p *Proxy) initBindRetry(c *Config) {
 	p.bindRetryIvl = bindRetries.Interval
 }
 
-// pendingRequestsOrDefault returns the pending requests if it's not nil,
-// otherwise it returns the default pending requests.
+// pendingRequestsOrDefault returns a pending-requests tracker when conf is
+// non-nil and Enabled; otherwise it returns an empty no-op implementation.
 func pendingRequestsOrDefault(conf *PendingRequestsConfig) (pr pendingRequests) {
 	if conf != nil && conf.Enabled {
 		return newDefaultPendingRequests()

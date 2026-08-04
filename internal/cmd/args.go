@@ -49,6 +49,7 @@ const (
 	ratelimitIdx
 	ratelimitSubnetLenIPv4Idx
 	ratelimitSubnetLenIPv6Idx
+	ratelimitMaxSizeIdx
 	udpBufferSizeIdx
 	maxGoRoutinesIdx
 	tlsMinVersionIdx
@@ -304,6 +305,13 @@ var commandLineOptions = []*commandLineOption{
 		short:       "",
 		valueType:   "int",
 	},
+	ratelimitMaxSizeIdx: {
+		description: "Max per-subnet UDP ratelimit buckets (oldest evicted when full). " +
+			"Default: 10000. Applies only when --ratelimit is positive.",
+		long:      "ratelimit-max-size",
+		short:     "",
+		valueType: "uint",
+	},
 	udpBufferSizeIdx: {
 		description: "Set the size of the UDP buffer in bytes. A value <= 0 will use the system " +
 			"default.",
@@ -525,6 +533,7 @@ func parseCmdLineOptions(conf *configuration) (err error) {
 		ratelimitIdx:                  &conf.Ratelimit,
 		ratelimitSubnetLenIPv4Idx:     &conf.RatelimitSubnetLenIPv4,
 		ratelimitSubnetLenIPv6Idx:     &conf.RatelimitSubnetLenIPv6,
+		ratelimitMaxSizeIdx:           &conf.RatelimitMaxSize,
 		udpBufferSizeIdx:              &conf.UDPBufferSize,
 		maxGoRoutinesIdx:              &conf.MaxGoRoutines,
 		tlsMinVersionIdx:              &conf.TLSMinVersion,

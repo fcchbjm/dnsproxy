@@ -8,6 +8,13 @@ import (
 	"github.com/AdguardTeam/golibs/validate"
 )
 
+// DefaultMaxSize is the Standalone default for [Config.MaxSize] when UDP
+// ratelimit is enabled.  It bounds per-subnet bucket growth under multi-source
+// scans while leaving headroom for typical client diversity with /24 and /64
+// aggregation (on the order of ~10k small go-rate entries, not unbounded map
+// growth).
+const DefaultMaxSize = 10_000
+
 // Config is the configuration for the ratelimit middleware.
 type Config struct {
 	// Logger is used for logging in the ratelimit middleware. It must not be
@@ -20,6 +27,12 @@ type Config struct {
 	// Ratelimit is a maximum number of requests per second from a given IP.  It
 	// must be positive.
 	Ratelimit uint
+
+	// MaxSize is the maximum number of per-subnet rate-limit buckets retained.
+	// When full, expired buckets are purged and the oldest live bucket is
+	// evicted before a new one is inserted.  Must be positive (breaking for
+	// embedders that previously omitted it; use [DefaultMaxSize]).
+	MaxSize uint
 
 	// SubnetLenIPv4 is a subnet length for IPv4 addresses used for rate
 	// limiting requests.
@@ -41,8 +54,9 @@ func (c *Config) Validate() (err error) {
 
 	return errors.Join(
 		validate.Positive("Ratelimit", c.Ratelimit),
+		validate.Positive("MaxSize", c.MaxSize),
 		validate.NotNil("Logger", c.Logger),
 		validate.NoGreaterThan("SubnetLenIPv4", c.SubnetLenIPv4, netutil.IPv4BitLen),
-		validate.NoGreaterThan("SubnetLenIPv4", c.SubnetLenIPv6, netutil.IPv6BitLen),
+		validate.NoGreaterThan("SubnetLenIPv6", c.SubnetLenIPv6, netutil.IPv6BitLen),
 	)
 }

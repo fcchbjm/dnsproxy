@@ -163,6 +163,7 @@ func (conf *configuration) newRatelimitMw(l *slog.Logger) (mw proxy.Middleware, 
 	rlConf := &ratelimit.Config{
 		Logger:        l.With(slogutil.KeyPrefix, "ratelimit"),
 		Ratelimit:     conf.Ratelimit,
+		MaxSize:       conf.RatelimitMaxSize,
 		SubnetLenIPv4: conf.RatelimitSubnetLenIPv4,
 		SubnetLenIPv6: conf.RatelimitSubnetLenIPv6,
 	}

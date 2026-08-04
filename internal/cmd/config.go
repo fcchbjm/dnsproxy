@@ -8,6 +8,7 @@ import (
 	"github.com/AdguardTeam/golibs/osutil"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/fcchbjm/dnsproxy/proxy"
+	"github.com/fcchbjm/dnsproxy/ratelimit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -141,6 +142,11 @@ type configuration struct {
 	// rate limiting requests.
 	RatelimitSubnetLenIPv6 uint `yaml:"ratelimit-subnet-len-ipv6"`
 
+	// RatelimitMaxSize is the maximum number of per-subnet UDP rate-limit
+	// buckets.  When full, the oldest bucket is evicted.  Applies only when
+	// Ratelimit is positive.  Standalone default is 10000.
+	RatelimitMaxSize uint `yaml:"ratelimit-max-size"`
+
 	// UDPBufferSize is the size of the UDP buffer in bytes.  A value <= 0 will
 	// use the system default.
 	UDPBufferSize int `yaml:"udp-buf-size"`
@@ -264,6 +270,7 @@ func newDefaultConfiguration() (conf *configuration) {
 		OptimisticMaxAge:           timeutil.Duration(proxy.DefaultOptimisticMaxAge),
 		RatelimitSubnetLenIPv4:     24,
 		RatelimitSubnetLenIPv6:     64,
+		RatelimitMaxSize:           ratelimit.DefaultMaxSize,
 		DNSSECEnabled:              true,
 		HostsFileEnabled:           true,
 		PendingRequestsEnabled:     true,

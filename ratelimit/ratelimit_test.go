@@ -43,6 +43,7 @@ func TestMiddleware_Wrap(t *testing.T) {
 		config: &ratelimit.Config{
 			Logger:        testLogger,
 			Ratelimit:     1,
+			MaxSize:       ratelimit.DefaultMaxSize,
 			SubnetLenIPv4: testSubnetLenIPv4,
 			SubnetLenIPv6: testSubnetLenIPv6,
 		},
@@ -57,6 +58,7 @@ func TestMiddleware_Wrap(t *testing.T) {
 		config: &ratelimit.Config{
 			Logger:        testLogger,
 			Ratelimit:     1,
+			MaxSize:       ratelimit.DefaultMaxSize,
 			SubnetLenIPv4: testSubnetLenIPv4,
 			SubnetLenIPv6: testSubnetLenIPv6,
 		},
@@ -109,6 +111,7 @@ func TestMiddleware_Wrap_allowlist(t *testing.T) {
 	conf := &ratelimit.Config{
 		Logger:        testLogger,
 		Ratelimit:     1,
+		MaxSize:       ratelimit.DefaultMaxSize,
 		SubnetLenIPv4: testSubnetLenIPv4,
 		SubnetLenIPv6: testSubnetLenIPv6,
 		AllowlistAddrs: netutil.SliceSubnetSet{

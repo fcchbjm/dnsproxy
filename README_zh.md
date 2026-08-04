@@ -230,6 +230,10 @@ Standalone 将 `--tls-timeout` / `tls-timeout` 默认设为 **60s**。嵌入宿�
 
 `--ratelimit` / YAML `ratelimit` **仅对 UDP**（`ProtoUDP`）生效。DoH、DoT 与纯 TCP DNS 不受同一开关约束。
 
+`--ratelimit-max-size` / `ratelimit-max-size` 限制按子网保留的 UDP 限流桶数量（Standalone 默认 **10000**）；满时淘汰最旧桶，避免多源扫描下 map 无界增长。
+
+自行构造 `ratelimit.Config` / `NewMiddleware` 的嵌入方须设置 **`MaxSize > 0`**（例如 `ratelimit.DefaultMaxSize`）；为 0 时校验失败。
+
 Standalone 默认 `ratelimit-subnet-len-ipv6` 为 **64**（与 `config.yaml.dist` 一致）；升级时若此前依赖隐式 **56** 且未显式配置该选项，IPv6 限流聚合会更细——需在 YAML/CLI 中显式设回以保留旧行为。
 
 ### `--doh-insecure-enabled` 含义
@@ -385,6 +389,8 @@ Usage of ./dnsproxy:
         Ratelimit subnet length for IPv4.
   --ratelimit-subnet-len-ipv6=int
         Ratelimit subnet length for IPv6.
+  --ratelimit-max-size=uint
+        Max per-subnet UDP ratelimit buckets (oldest evicted when full). Default: 10000. Applies only when --ratelimit is positive.
   --refuse-any
         If specified, refuses ANY requests.
   --timeout=duration

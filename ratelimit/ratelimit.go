@@ -25,6 +25,7 @@ type middleware struct {
 
 	allowlistAddrs netutil.SliceSubnetSet
 	ratelimit      uint
+	maxSize        uint
 	subnetLenIPv4  uint
 	subnetLenIPv6  uint
 }
@@ -37,6 +38,7 @@ func NewMiddleware(c *Config) (m proxy.Middleware) {
 		mu:             &sync.Mutex{},
 		allowlistAddrs: c.AllowlistAddrs,
 		ratelimit:      c.Ratelimit,
+		maxSize:        c.MaxSize,
 		subnetLenIPv4:  c.SubnetLenIPv4,
 		subnetLenIPv6:  c.SubnetLenIPv6,
 	}
@@ -68,16 +70,72 @@ func (m *middleware) limiterForIP(ip string) (rl any) {
 	defer m.mu.Unlock()
 
 	if m.buckets == nil {
-		m.buckets = gocache.New(time.Hour, time.Hour)
+		// cleanupInterval matches default bucket TTL; janitor is best-effort.
+		// Insertions still DeleteExpired when at MaxSize so ItemCount cannot
+		// grow past MaxSize when expired entries linger.
+		m.buckets = gocache.New(bucketTTL, bucketTTL)
 	}
 
 	rl, ok := m.buckets.Get(ip)
-	if !ok {
-		rl = rate.New(int(m.ratelimit), time.Second)
-		m.buckets.Set(ip, rl, time.Hour)
+	if ok {
+		return rl
 	}
 
+	m.ensureBucketCapacityLocked()
+
+	rl = rate.New(int(m.ratelimit), time.Second)
+	m.buckets.Set(ip, rl, bucketTTL)
+
 	return rl
+}
+
+// bucketTTL is how long a per-subnet rate-limit bucket is retained.
+const bucketTTL = time.Hour
+
+// ensureBucketCapacityLocked makes room for one new bucket.  m.mu must be held.
+//
+// go-cache ItemCount includes expired entries until they are deleted, while
+// Items only returns live ones.  Clear expired first, then evict the oldest
+// live bucket until ItemCount is below MaxSize.
+func (m *middleware) ensureBucketCapacityLocked() {
+	for m.buckets.ItemCount() >= int(m.maxSize) {
+		before := m.buckets.ItemCount()
+		m.buckets.DeleteExpired()
+		if m.buckets.ItemCount() < int(m.maxSize) {
+			return
+		}
+		if !m.evictOldestLocked() {
+			return
+		}
+		if m.buckets.ItemCount() >= before {
+			return
+		}
+	}
+}
+
+// evictOldestLocked deletes one live bucket with the earliest expiration.
+// m.mu must be held.  Reports whether a key was deleted.
+func (m *middleware) evictOldestLocked() (ok bool) {
+	items := m.buckets.Items()
+	var (
+		oldestKey string
+		oldestExp int64
+		found     bool
+	)
+	for k, it := range items {
+		if !found || it.Expiration < oldestExp {
+			oldestKey = k
+			oldestExp = it.Expiration
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+
+	m.buckets.Delete(oldestKey)
+
+	return true
 }
 
 // isRatelimited checks if the specified address should be rate limited.
