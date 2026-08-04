@@ -119,6 +119,15 @@ func createProxyConfig(
 		HTTPConfig: httpConf,
 	}
 
+	if conf.CacheOptimistic && conf.HostsFileEnabled {
+		// Optimistic refresh calls replyFromUpstream directly and skips the
+		// hosts middleware wrapped into RequestHandler.
+		l.Warn(
+			"cache-optimistic with hosts-file-enabled: optimistic refresh bypasses hosts middleware; " +
+				"do not rely on hosts overrides for expired-cache refreshes",
+		)
+	}
+
 	conf.initBogusNXDomain(ctx, l, proxyConf)
 
 	var errs []error
@@ -128,7 +137,7 @@ func createProxyConfig(
 	errs = append(errs, conf.initDNSCryptConfig(proxyConf))
 	errs = append(errs, conf.initListenAddrs(proxyConf))
 	errs = append(errs, conf.initSubnets(proxyConf))
-	errs = append(errs, conf.initTrustedProxies(proxyConf))
+	errs = append(errs, conf.initTrustedProxies(l, proxyConf))
 
 	return proxyConf, errors.Join(errs...)
 }
@@ -653,8 +662,13 @@ func parseServerFileLines(data string) (servers []string) {
 }
 
 // initTrustedProxies sets TrustedProxies from configuration.  Empty means no
-// peer is trusted for DoH forwarding headers or Proxy Protocol v2.
-func (conf *configuration) initTrustedProxies(proxyConf *proxy.Config) (err error) {
+// peer is trusted for DoH forwarding headers or Proxy Protocol v2.  A /0
+// prefix is still accepted but emits a Warn: it restores header/PPv2 spoofing
+// for any direct peer.
+func (conf *configuration) initTrustedProxies(
+	l *slog.Logger,
+	proxyConf *proxy.Config,
+) (err error) {
 	if len(conf.TrustedProxies) == 0 {
 		proxyConf.TrustedProxies = netutil.SliceSubnetSet{}
 
@@ -673,8 +687,30 @@ func (conf *configuration) initTrustedProxies(proxyConf *proxy.Config) (err erro
 	}
 
 	proxyConf.TrustedProxies = netutil.SliceSubnetSet(trusted)
+	warnTrustedProxiesWideOpen(l, trusted)
 
 	return nil
+}
+
+// warnTrustedProxiesWideOpen logs when any configured prefix is /0
+// (0.0.0.0/0 or ::/0).
+func warnTrustedProxiesWideOpen(l *slog.Logger, trusted []netip.Prefix) {
+	var wide []string
+	for _, pref := range trusted {
+		if pref.Bits() == 0 {
+			wide = append(wide, pref.String())
+		}
+	}
+	if len(wide) == 0 {
+		return
+	}
+
+	l.Warn(
+		"trusted-proxies contains a /0 prefix; any direct peer can forge "+
+			"DoH client-IP headers and Proxy Protocol v2; set trusted-proxies "+
+			"to real load-balancer CIDRs instead",
+		"prefixes", wide,
+	)
 }
 
 // hostsFiles returns the list of hosts files to resolve from.  It's empty if

@@ -106,6 +106,7 @@ Also:
 - Restrict network access so only LB/proxy can reach PPv2-enabled listeners.
 - Do not accept client-provided PPv2 at the public edge (e.g. `accept-proxy` at boundary listeners), otherwise source address spoofing becomes possible.
 - Embedded hosts that construct `proxy.Config` themselves should pass a tight `TrustedProxies` set (often loopback-only behind a local reverse proxy).
+- Explicit `0.0.0.0/0` / `::/0` in `trusted-proxies` is still allowed but logs a startup **Warn** (spoofing footgun); do not use that on public edges—set real LB CIDRs instead.
 
 #### Minimal HAProxy fragment (DoT example)
 
@@ -209,6 +210,10 @@ Standalone defaults `--tls-timeout` / `tls-timeout` to **60s**. Embedders that l
 ### DoH max concurrent requests (opt-in)
 
 `--doh-max-concurrent` / `doh-max-concurrent` caps in-flight DoH work in `Proxy.ServeHTTP` (HTTP/1.1, HTTP/2, and HTTP/3 share the limit). **Default 0 = unlimited**. At capacity the handler returns **HTTP 429** with `Retry-After: 1`. Orthogonal to `--max-go-routines` and `--max-tcp-connections`. Public deployments should set an explicit value (e.g. `256`); see `config.yaml.dist`. Embedders that only register `ServeHTTP` on their own `http.Server` get the same limit when `HTTPConfig.MaxConcurrentRequests` is set.
+
+### Optimistic cache vs hosts files
+
+Enabling both `--cache-optimistic` / `cache-optimistic` and `--hosts-file-enabled` / `hosts-file-enabled` is allowed but risky: expired-cache optimistic refresh bypasses the hosts middleware (it does not re-apply hosts overrides). Prefer not combining them when hosts is used as a policy override; Standalone logs a warning when both are on.
 
 ### Rate limiting scope
 

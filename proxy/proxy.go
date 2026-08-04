@@ -288,6 +288,11 @@ func (p *Proxy) applyDefaults() {
 	p.ProxyProtocolV2ReadTimeout = cmp.Or(p.ProxyProtocolV2ReadTimeout, defaultPPv2Timeout)
 	p.TLSTimeout = cmp.Or(p.TLSTimeout, DefaultTLSTimeout)
 	p.UpstreamMode = cmp.Or(p.UpstreamMode, UpstreamModeLoadBalance)
+
+	// nil interface would panic on Contains; empty set is fail-closed.
+	if p.TrustedProxies == nil {
+		p.TrustedProxies = netutil.SliceSubnetSet{}
+	}
 }
 
 func (p *Proxy) initRequestsSema() {
@@ -309,12 +314,19 @@ func (p *Proxy) initRequestsSema() {
 }
 
 func (p *Proxy) initTCPConnsSema() {
-	if p.MaxTCPConnections == 0 {
+	if p.MaxTCPConnections > 0 {
+		p.logger.Info("max tcp connections is set", "count", p.MaxTCPConnections)
+		p.tcpConnsSema = make(chan struct{}, p.MaxTCPConnections)
+
 		return
 	}
 
-	p.logger.Info("max tcp connections is set", "count", p.MaxTCPConnections)
-	p.tcpConnsSema = make(chan struct{}, p.MaxTCPConnections)
+	if len(p.TCPListenAddr) > 0 || len(p.TLSListenAddr) > 0 {
+		p.logger.Warn(
+			"max tcp connections is unlimited; consider setting an explicit limit for public deployments",
+			"max_tcp_connections", p.MaxTCPConnections,
+		)
+	}
 }
 
 func (p *Proxy) tryHoldTCPConn() (ok bool) {
@@ -342,15 +354,26 @@ func (p *Proxy) releaseTCPConn() {
 }
 
 func (p *Proxy) initDoHReqSema() {
-	if p.HTTPConfig == nil || p.HTTPConfig.MaxConcurrentRequests == 0 {
+	if p.HTTPConfig == nil {
 		return
 	}
 
-	p.logger.Info(
-		"max doh concurrent requests is set",
-		"count", p.HTTPConfig.MaxConcurrentRequests,
+	if p.HTTPConfig.MaxConcurrentRequests > 0 {
+		p.logger.Info(
+			"max doh concurrent requests is set",
+			"count", p.HTTPConfig.MaxConcurrentRequests,
+		)
+		p.dohReqSema = make(chan struct{}, p.HTTPConfig.MaxConcurrentRequests)
+
+		return
+	}
+
+	// HTTPConfig may be used only as an http.Handler via ServeHTTP (no
+	// ListenAddresses); the concurrent cap still applies on that path.
+	p.logger.Warn(
+		"max doh concurrent requests is unlimited; consider setting an explicit limit for public deployments",
+		"doh_max_concurrent", p.HTTPConfig.MaxConcurrentRequests,
 	)
-	p.dohReqSema = make(chan struct{}, p.HTTPConfig.MaxConcurrentRequests)
 }
 
 func (p *Proxy) tryHoldDoHReq() (ok bool) {

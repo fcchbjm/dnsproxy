@@ -107,6 +107,7 @@ LB / 反代部署须显式配置：
 - 在网络层限制：只允许 LB/代理到达启用 PPv2 的监听端。
 - 不要在公网入口接受来自客户端的 PPv2（例如在边界 listener 上启用 `accept-proxy`），否则等同于允许伪造源地址。
 - 自行构造 `proxy.Config` 的嵌入宿主应将 `TrustedProxies` 收紧（常见为仅环回）。
+- 显式配置 `0.0.0.0/0` / `::/0` 仍允许启动，但会打一条启动 **Warn**（伪造链陷阱）；公网勿如此配置，应改为真实 LB CIDR。
 
 #### 5 分钟迁移：最小 HAProxy 配置片段
 
@@ -220,6 +221,10 @@ Standalone 将 `--tls-timeout` / `tls-timeout` 默认设为 **60s**。嵌入宿�
 ### DoH 并发上限（opt-in）
 
 `--doh-max-concurrent` / `doh-max-concurrent` 限制 `Proxy.ServeHTTP` 上的在途 DoH（HTTP/1.1 / HTTP/2 / HTTP/3 共用）。**默认 0 = 不限制**。满额返回 **HTTP 429** 并带 `Retry-After: 1`。与 `--max-go-routines`、`--max-tcp-connections` 正交。公网建议显式设置（例如 `256`）；见 `config.yaml.dist`。嵌入宿主若只把 `ServeHTTP` 挂到自管 `http.Server`，只要设置了 `HTTPConfig.MaxConcurrentRequests` 即同样生效。
+
+### 乐观缓存与 hosts 文件
+
+同时开启 `--cache-optimistic` / `cache-optimistic` 与 `--hosts-file-enabled` / `hosts-file-enabled` 虽允许，但有风险：过期缓存的乐观刷新会绕过 hosts middleware（不会再次套用 hosts 覆盖）。若 hosts 用作策略覆盖，建议不要同开；Standalone 在两者同时开启时会打告警。
 
 ### 限流作用域
 

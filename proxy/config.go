@@ -37,9 +37,10 @@ type Config struct {
 	// [slog.Default] with [LogPrefix] is used.
 	Logger *slog.Logger
 
-	// TrustedProxies is the trusted list of CIDR networks to detect proxy
-	// servers addresses from where the DoH requests should be handled.  The
-	// value of nil makes Proxy not trust any address.
+	// TrustedProxies is the set of CIDR networks whose direct peers may supply
+	// DoH client-IP headers or Proxy Protocol v2.  A nil value means trust
+	// nobody; [New] normalizes nil to an empty [netutil.SliceSubnetSet] so
+	// Contains never panics and behaves as fail-closed (same as an empty set).
 	TrustedProxies netutil.SubnetSet
 
 	// PrivateSubnets is the set of private networks.  Client having an address

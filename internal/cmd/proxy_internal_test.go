@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,5 +127,166 @@ func TestLoadServersList(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, servers)
 		assert.Contains(t, err.Error(), "reading servers list")
+	})
+}
+
+const warnOptimisticHostsCombo = "cache-optimistic with hosts-file-enabled"
+
+func TestCreateProxyConfig_optimisticHostsWarn(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	baseConf := func(tb testing.TB) (conf *configuration) {
+		tb.Helper()
+
+		hostsPath := filepath.Join(tb.TempDir(), "hosts")
+		require.NoError(tb, os.WriteFile(hostsPath, []byte{}, 0o600))
+
+		conf = newDefaultConfiguration()
+		conf.HostsFileEnabled = false
+		conf.CacheOptimistic = false
+		conf.ListenAddrs = []string{"127.0.0.1"}
+		conf.ListenPorts = []uint16{0}
+		conf.Upstreams = []string{"127.0.0.1:53"}
+		conf.HostsFiles = []string{hostsPath}
+
+		return conf
+	}
+
+	t.Run("both_enabled_warns", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.HostsFileEnabled = true
+		conf.CacheOptimistic = true
+
+		_, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.Contains(t, logBuf.String(), warnOptimisticHostsCombo)
+	})
+
+	t.Run("optimistic_only_no_combo_warn", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.HostsFileEnabled = false
+		conf.CacheOptimistic = true
+
+		_, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.NotContains(t, logBuf.String(), warnOptimisticHostsCombo)
+	})
+
+	t.Run("hosts_only_no_combo_warn", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.HostsFileEnabled = true
+		conf.CacheOptimistic = false
+
+		_, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.NotContains(t, logBuf.String(), warnOptimisticHostsCombo)
+	})
+}
+
+const warnTrustedProxiesWideOpenMsg = "trusted-proxies contains a /0 prefix"
+
+func TestCreateProxyConfig_trustedProxiesWideOpenWarn(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	baseConf := func(tb testing.TB) (conf *configuration) {
+		tb.Helper()
+
+		conf = newDefaultConfiguration()
+		conf.HostsFileEnabled = false
+		conf.ListenAddrs = []string{"127.0.0.1"}
+		conf.ListenPorts = []uint16{0}
+		conf.Upstreams = []string{"127.0.0.1:53"}
+		conf.TrustedProxies = nil
+
+		return conf
+	}
+
+	t.Run("v4_slash_zero_warns", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.TrustedProxies = []string{"0.0.0.0/0"}
+
+		proxyConf, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.Contains(t, logBuf.String(), warnTrustedProxiesWideOpenMsg)
+		require.NotNil(t, proxyConf.TrustedProxies)
+		assert.True(t, proxyConf.TrustedProxies.Contains(netip.MustParseAddr("8.8.8.8")))
+	})
+
+	t.Run("v6_slash_zero_warns", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.TrustedProxies = []string{"::/0"}
+
+		proxyConf, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.Contains(t, logBuf.String(), warnTrustedProxiesWideOpenMsg)
+		require.NotNil(t, proxyConf.TrustedProxies)
+		assert.True(t, proxyConf.TrustedProxies.Contains(netip.MustParseAddr("2001:db8::1")))
+	})
+
+	t.Run("v4_and_v6_slash_zero_one_warn", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.TrustedProxies = []string{"0.0.0.0/0", "::/0"}
+
+		proxyConf, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		logText := logBuf.String()
+		assert.Equal(t, 1, strings.Count(logText, warnTrustedProxiesWideOpenMsg))
+		require.NotNil(t, proxyConf.TrustedProxies)
+		assert.True(t, proxyConf.TrustedProxies.Contains(netip.MustParseAddr("1.2.3.4")))
+		assert.True(t, proxyConf.TrustedProxies.Contains(netip.MustParseAddr("2001:db8::2")))
+	})
+
+	t.Run("empty_no_warn", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.TrustedProxies = []string{}
+
+		_, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.NotContains(t, logBuf.String(), warnTrustedProxiesWideOpenMsg)
+	})
+
+	t.Run("loopback_only_no_warn", func(t *testing.T) {
+		t.Parallel()
+
+		logBuf := &bytes.Buffer{}
+		l := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		conf := baseConf(t)
+		conf.TrustedProxies = []string{"127.0.0.0/8"}
+
+		_, err := createProxyConfig(ctx, l, conf)
+		require.NoError(t, err)
+		assert.NotContains(t, logBuf.String(), warnTrustedProxiesWideOpenMsg)
 	})
 }
