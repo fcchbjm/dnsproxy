@@ -197,7 +197,7 @@ func (p *Proxy) handleTCPConnection(
 	defer cancel()
 
 	for p.isStarted() {
-		p.setConnReadOrFullDeadline(ctx, conn, proto)
+		p.setConnReadDeadline(ctx, conn, proto)
 
 		req, ok := p.readDNSReqForTCP(ctx, conn, proto, &clientInitiatedClose)
 		if !ok {
@@ -248,30 +248,29 @@ func (p *Proxy) setTCPKeepAlive(ctx context.Context, conn net.Conn) {
 	}
 }
 
-// setConnReadOrFullDeadline sets the proper deadline for TCP/TLS connections.
-func (p *Proxy) setConnReadOrFullDeadline(ctx context.Context, conn net.Conn, proto Proto) {
-	err := p.setTCPReadOrFullDeadline(conn, proto)
+// setConnReadDeadline sets the idle-read deadline for TCP/DoT connections.
+// Writes use a separate SetWriteDeadline in respond.
+func (p *Proxy) setConnReadDeadline(ctx context.Context, conn net.Conn, proto Proto) {
+	err := p.setTCPReadDeadline(conn, proto)
 	if err != nil {
 		logWithNonCrit(ctx, err, tcpDeadlineMsg(proto), proto, p.logger)
 	}
 }
 
-func (p *Proxy) setTCPReadOrFullDeadline(conn net.Conn, proto Proto) (err error) {
+// setTCPReadDeadline sets a read-only idle deadline so outbound responses
+// are not tied to the idle read window (same shape as DoT).  ProtoTCP uses
+// [defaultTimeout]; ProtoTLS uses [Proxy.TLSTimeout].  Writes still rely on
+// respond's SetWriteDeadline.
+func (p *Proxy) setTCPReadDeadline(conn net.Conn, proto Proto) (err error) {
 	if proto == ProtoTLS {
-		// DoT: read deadline only so outbound responses are not tied to the idle
-		// read window (avoids premature full-deadline shutdown vs long-lived clients).
 		return conn.SetReadDeadline(time.Now().Add(p.TLSTimeout))
 	}
 
-	return conn.SetDeadline(time.Now().Add(defaultTimeout))
+	return conn.SetReadDeadline(time.Now().Add(defaultTimeout))
 }
 
-func tcpDeadlineMsg(proto Proto) (msg string) {
-	if proto == ProtoTLS {
-		return "setting read deadline"
-	}
-
-	return "setting deadline"
+func tcpDeadlineMsg(_ Proto) (msg string) {
+	return "setting read deadline"
 }
 
 func (p *Proxy) readDNSReqForTCP(

@@ -85,21 +85,33 @@ func (p *Proxy) handleDNSRequest(ctx context.Context, d *DNSContext) (err error)
 		return nil
 	}
 
-	ip := d.Addr.Addr()
-	d.IsPrivateClient = p.privateNets.Contains(ip)
+	err = p.serveDNSRequest(ctx, d)
+	if errors.Is(err, ErrDrop) {
+		// Don't reply to dropped clients.
+		return nil
+	}
+
+	p.respond(ctx, d)
+
+	return err
+}
+
+// serveDNSRequest runs validation and the request handler without writing a
+// response to the network.  It returns [ErrDrop] when the handler asks to drop
+// the reply; callers must not respond in that case.
+func (p *Proxy) serveDNSRequest(ctx context.Context, d *DNSContext) (err error) {
+	d.IsPrivateClient = p.privateNets.Contains(d.Addr.Addr())
 
 	// TODO(d.kolyshev):  Consider moving validation to a new middleware.
 	d.Res = p.validateRequest(d)
 	if d.Res == nil {
 		err = p.requestHandler.ServeDNS(ctx, p, d)
 		if errors.Is(err, ErrDrop) {
-			// Don't reply to dropped clients.
-			return nil
+			return ErrDrop
 		}
 	}
 
 	p.logDNSMessage(ctx, d.Res)
-	p.respond(ctx, d)
 
 	return err
 }

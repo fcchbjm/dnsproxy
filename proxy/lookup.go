@@ -20,7 +20,8 @@ type lookupResult struct {
 }
 
 // lookupIPAddr resolves the specified host IP addresses.  It is intended to be
-// used as a goroutine.
+// used as a goroutine.  It uses the same validation and request-handler path as
+// inbound queries, but does not write a DNS response to the network.
 func (p *Proxy) lookupIPAddr(
 	ctx context.Context,
 	host string,
@@ -31,9 +32,19 @@ func (p *Proxy) lookupIPAddr(
 
 	req := (&dns.Msg{}).SetQuestion(host, qtype)
 
+	// Not an inbound UDP client: Addr is unset, so ProtoUDP would share the
+	// ratelimit "invalid IP" bucket and silently ErrDrop.  ProtoTCP keeps
+	// RequestHandler/hosts but skips UDP-only ratelimit.
+	//
 	// TODO(d.kolyshev): Investigate why the client address is not defined.
-	d := p.newDNSContext(ProtoUDP, req, netip.AddrPort{})
-	err := p.Resolve(ctx, d)
+	d := p.newDNSContext(ProtoTCP, req, netip.AddrPort{})
+	err := p.serveDNSRequest(ctx, d)
+	if errors.Is(err, ErrDrop) {
+		ch <- &lookupResult{}
+
+		return
+	}
+
 	ch <- &lookupResult{
 		resp: d.Res,
 		err:  err,
@@ -71,6 +82,10 @@ func (p *Proxy) LookupNetIP(
 		if result.err != nil {
 			errs = append(errs, result.err)
 
+			continue
+		}
+
+		if result.resp == nil {
 			continue
 		}
 

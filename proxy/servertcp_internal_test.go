@@ -125,6 +125,12 @@ func TestProxy_tcpProxyProtocolV2_RejectsUntrustedProxy(t *testing.T) {
 		TCPProxyProtocolV2Enabled: true,
 		TrustedProxies:            nil,
 	})
+	// New must normalize nil to an empty set (fail-closed), not leave a nil
+	// interface that panics on Contains.
+	require.NotNil(t, dnsProxy.TrustedProxies)
+	require.False(t, dnsProxy.TrustedProxies.Contains(netip.MustParseAddr("127.0.0.1")))
+	require.False(t, dnsProxy.TrustedProxies.Contains(netip.MustParseAddr("1.2.3.4")))
+
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
 
 	rawConn, err := net.Dial("tcp", dnsProxy.Addr(ProtoTCP).String())
@@ -142,7 +148,7 @@ func TestProxy_tcpProxyProtocolV2_RejectsUntrustedProxy(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = dnsConn.ReadMsg()
-	require.Error(t, err)
+	require.Error(t, err, "PPv2 from untrusted peer must be rejected without panic")
 }
 
 func TestProxy_tlsProxyProtocolV2_Strict(t *testing.T) {
@@ -718,6 +724,80 @@ func makeProxyProtocolV2RawHeader(verCmd, famProto byte, payload []byte) (hdr []
 	copy(hdr[16:], payload)
 
 	return hdr
+}
+
+// recordingDeadlineConn records SetDeadline / SetReadDeadline calls for tests.
+type recordingDeadlineConn struct {
+	setDeadlineN     int
+	setReadDeadlineN int
+	lastReadDeadline time.Time
+}
+
+func (*recordingDeadlineConn) Read([]byte) (int, error)  { return 0, io.EOF }
+func (*recordingDeadlineConn) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+func (*recordingDeadlineConn) Close() error              { return nil }
+func (*recordingDeadlineConn) LocalAddr() net.Addr       { return nil }
+func (*recordingDeadlineConn) RemoteAddr() net.Addr      { return nil }
+
+func (c *recordingDeadlineConn) SetDeadline(time.Time) error {
+	c.setDeadlineN++
+
+	return nil
+}
+
+func (c *recordingDeadlineConn) SetReadDeadline(t time.Time) error {
+	c.setReadDeadlineN++
+	c.lastReadDeadline = t
+
+	return nil
+}
+
+func (*recordingDeadlineConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestSetTCPReadDeadline(t *testing.T) {
+	t.Parallel()
+
+	const tlsIdle = 30 * time.Second
+
+	p := mustNew(t, &Config{
+		Logger:         testLogger,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
+		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: defaultTrustedProxies,
+		TLSTimeout:     tlsIdle,
+	})
+
+	t.Run("tcp_read_only", func(t *testing.T) {
+		t.Parallel()
+
+		conn := &recordingDeadlineConn{}
+		before := time.Now()
+		require.NoError(t, p.setTCPReadDeadline(conn, ProtoTCP))
+
+		require.Equal(t, 0, conn.setDeadlineN)
+		require.Equal(t, 1, conn.setReadDeadlineN)
+		require.False(t, conn.lastReadDeadline.IsZero())
+		require.WithinDuration(t, before.Add(defaultTimeout), conn.lastReadDeadline, time.Second)
+	})
+
+	t.Run("tls_unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		conn := &recordingDeadlineConn{}
+		before := time.Now()
+		require.NoError(t, p.setTCPReadDeadline(conn, ProtoTLS))
+
+		require.Equal(t, 0, conn.setDeadlineN)
+		require.Equal(t, 1, conn.setReadDeadlineN)
+		require.WithinDuration(t, before.Add(tlsIdle), conn.lastReadDeadline, time.Second)
+	})
+}
+
+func TestTCPDeadlineMsg(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "setting read deadline", tcpDeadlineMsg(ProtoTCP))
+	require.Equal(t, "setting read deadline", tcpDeadlineMsg(ProtoTLS))
 }
 
 func TestProxy_TLSTimeout_defaultZero(t *testing.T) {
