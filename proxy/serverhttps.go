@@ -74,11 +74,22 @@ func (p *Proxy) listenH3(
 	return quicListen, nil
 }
 
+// doh3MaxIncomingUniStreams bounds incoming unidirectional QUIC streams for
+// DoH3.  Must stay positive: -1 disables uni-streams and breaks HTTP/3.
+const doh3MaxIncomingUniStreams = 3
+
 // newServerDoH3Config creates *quic.Config populated with the default settings.
 // This function is supposed to be used for the DoH3 server only.
+//
+// DoQ sets MaxIncomingUniStreams to -1 because DNS-over-QUIC does not use
+// unidirectional streams.  HTTP/3 requires them (control / QPACK); disabling
+// with -1 breaks DoH3, so we cap instead of forbidding.
 func newServerDoH3Config() (conf *quic.Config) {
 	return &quic.Config{
 		MaxIdleTimeout: maxQUICIdleTimeout,
+		// Cap uni-stream acceptance (library default is much higher).  RFC 9114
+		// needs a small number of unidirectional streams; 3 matches that floor.
+		MaxIncomingUniStreams: doh3MaxIncomingUniStreams,
 		// Enable 0-RTT by default for all connections on the server-side.
 		Allow0RTT: true,
 	}
@@ -197,16 +208,23 @@ func newDoHReq(
 
 // ServeHTTP is the http.Handler implementation that handles DoH queries.
 //
+// Processing order after constructing the request context:
+//
+//  1. Reject unencrypted requests unless InsecureEnabled.
+//  2. Acquire the DoH concurrency slot (429 + Retry-After: 1 if full).
+//  3. remoteAddr / BasicAuth / newDoHReq / TrustedProxies / handleDNSRequest.
+//
 // Here is what it returns:
 //
 //   - http.StatusNotFound if the request is not encrypted and proxy is not
 //     configured to accept unencrypted requests,
+//   - http.StatusTooManyRequests if [HTTPConfig.MaxConcurrentRequests] is
+//     exceeded (with Retry-After: 1), checked before auth and DNS parsing,
+//   - http.StatusUnauthorized if BasicAuth is required and fails,
 //   - http.StatusBadRequest if there is no DNS request data,
 //   - http.StatusUnsupportedMediaType if request content type is not
 //     "application/dns-message",
-//   - http.StatusMethodNotAllowed if request method is not GET or POST,
-//   - http.StatusTooManyRequests if [HTTPConfig.MaxConcurrentRequests] is
-//     exceeded (with Retry-After: 1 when set).
+//   - http.StatusMethodNotAllowed if request method is not GET or POST.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ctx, cancel := p.reqCtx.New(ctx)
@@ -220,6 +238,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	if !p.tryHoldDoHReq() {
+		w.Header().Set(httphdr.RetryAfter, "1")
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+
+		return
+	}
+	defer p.releaseDoHReq()
 
 	raddr, prx, err := remoteAddr(r, p.logger)
 	if err != nil {
@@ -252,14 +278,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			raddr = prx
 		}
 	}
-
-	if !p.tryHoldDoHReq() {
-		w.Header().Set(httphdr.RetryAfter, "1")
-		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
-
-		return
-	}
-	defer p.releaseDoHReq()
 
 	d := p.newDNSContext(ProtoHTTPS, req, raddr)
 	d.HTTPRequest = r

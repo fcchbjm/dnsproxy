@@ -552,6 +552,9 @@ func newServerQUICConfig() (conf *quic.Config) {
 		// unidirectional streams can lead to memory exhaustion.
 		//
 		// See AGDNS-4233.
+		//
+		// Do not copy this -1 into DoH3 ([newServerDoH3Config]): HTTP/3 needs
+		// uni-streams and must cap them instead.
 		MaxIncomingUniStreams: -1,
 		// Enable 0-RTT by default for all connections on the server-side.
 		Allow0RTT: true,
