@@ -114,6 +114,56 @@ func TestUpstreamDoH(t *testing.T) {
 	}
 }
 
+func TestUpstreamDoH_timeoutNormalized(t *testing.T) {
+	t.Parallel()
+
+	srv := startDoHServer(t, testDoHServerOptions{})
+	address := fmt.Sprintf("https://%s/dns-query", srv.addr)
+
+	t.Run("zero_uses_dial_timeout", func(t *testing.T) {
+		t.Parallel()
+
+		u, err := AddressToUpstream(address, &Options{
+			Logger:             testLogger,
+			InsecureSkipVerify: true,
+			HTTPVersions:       []HTTPVersion{HTTPVersion11, HTTPVersion2},
+			Timeout:            0,
+		})
+		require.NoError(t, err)
+		testutil.CleanupAndRequireSuccess(t, u.Close)
+
+		doh := testutil.RequireTypeAssert[*dnsOverHTTPS](t, u)
+		require.Equal(t, dialTimeout, doh.timeout)
+
+		client, err := doh.createClient()
+		require.NoError(t, err)
+		require.Equal(t, dialTimeout, client.Timeout)
+		require.Positive(t, client.Timeout)
+	})
+
+	t.Run("explicit_positive_preserved", func(t *testing.T) {
+		t.Parallel()
+
+		const custom = 3 * time.Second
+
+		u, err := AddressToUpstream(address, &Options{
+			Logger:             testLogger,
+			InsecureSkipVerify: true,
+			HTTPVersions:       []HTTPVersion{HTTPVersion11, HTTPVersion2},
+			Timeout:            custom,
+		})
+		require.NoError(t, err)
+		testutil.CleanupAndRequireSuccess(t, u.Close)
+
+		doh := testutil.RequireTypeAssert[*dnsOverHTTPS](t, u)
+		require.Equal(t, custom, doh.timeout)
+
+		client, err := doh.createClient()
+		require.NoError(t, err)
+		require.Equal(t, custom, client.Timeout)
+	})
+}
+
 func TestUpstreamDoH_raceReconnect(t *testing.T) {
 	t.Parallel()
 

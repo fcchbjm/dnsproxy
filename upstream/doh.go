@@ -103,7 +103,8 @@ type dnsOverHTTPS struct {
 	// separately to reduce allocations during logging and error reporting.
 	addrRedacted string
 
-	// timeout is used in HTTP client and for H3 probes.
+	// timeout is used in the HTTP client and for H3/TLS probes.  It is always
+	// positive (non-positive Options.Timeout becomes dialTimeout in newDoH).
 	timeout time.Duration
 }
 
@@ -126,6 +127,11 @@ func newDoH(addr *url.URL, opts *Options) (u Upstream, err error) {
 
 	if opts.QUICTracer != nil {
 		quicConf.Tracer = opts.QUICTracer.TraceForConnection
+	}
+
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = dialTimeout
 	}
 
 	ups := &dnsOverHTTPS{
@@ -151,7 +157,7 @@ func newDoH(addr *url.URL, opts *Options) (u Upstream, err error) {
 		clientMu:     &sync.Mutex{},
 		logger:       opts.Logger,
 		addrRedacted: addr.Redacted(),
-		timeout:      opts.Timeout,
+		timeout:      timeout,
 	}
 	for _, v := range httpVersions {
 		ups.tlsConf.NextProtos = append(ups.tlsConf.NextProtos, string(v))
@@ -433,7 +439,7 @@ func (p *dnsOverHTTPS) getClient() (c *http.Client, isCached bool, err error) {
 	// Timeout can be exceeded while waiting for the lock. This happens quite
 	// often on mobile devices.
 	elapsed := time.Since(startTime)
-	if p.timeout > 0 && elapsed > p.timeout {
+	if elapsed > p.timeout {
 		return nil, false, fmt.Errorf("timeout exceeded: %s", elapsed)
 	}
 
@@ -455,10 +461,8 @@ func (p *dnsOverHTTPS) createClient() (*http.Client, error) {
 
 	client := &http.Client{
 		Transport: transport,
-		// TODO(ameshkov):  p.timeout may appear zero that will disable the
-		// timeout for client, consider using the default.
-		Timeout: p.timeout,
-		Jar:     nil,
+		Timeout:   p.timeout,
+		Jar:       nil,
 	}
 
 	p.client = client
@@ -681,11 +685,7 @@ func (p *dnsOverHTTPS) probeH3(
 func (p *dnsOverHTTPS) probeQUIC(addr string, tlsConfig *tls.Config, ch chan error) {
 	startTime := time.Now()
 
-	t := p.timeout
-	if t == 0 {
-		t = dialTimeout
-	}
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(t))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(p.timeout))
 	defer cancel()
 
 	conn, err := dialDoHQUIC(ctx, addr, tlsConfig, p.getQUICConfig())
@@ -708,12 +708,7 @@ func (p *dnsOverHTTPS) probeQUIC(addr string, tlsConfig *tls.Config, ch chan err
 func (p *dnsOverHTTPS) probeTLS(dialContext bootstrap.DialHandler, tlsConfig *tls.Config, ch chan error) {
 	startTime := time.Now()
 
-	t := p.timeout
-	if t == 0 {
-		t = dialTimeout
-	}
-
-	conn, err := tlsDial(dialContext, tlsConfig, t)
+	conn, err := tlsDial(dialContext, tlsConfig, p.timeout)
 	if err != nil {
 		ch <- fmt.Errorf("opening TLS connection: %w", err)
 		return

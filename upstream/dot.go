@@ -19,8 +19,8 @@ import (
 	"github.com/miekg/dns"
 )
 
-// dialTimeout is the default DoT dial/exchange deadline when Options.Timeout
-// is unset (zero).
+// dialTimeout is the default dial/exchange deadline when Options.Timeout is
+// unset (zero) for DoT and DoH.
 const dialTimeout = 10 * time.Second
 
 // dnsOverTLS implements the [Upstream] interface for the DNS-over-TLS protocol.

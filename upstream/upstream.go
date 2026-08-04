@@ -97,8 +97,10 @@ type Options struct {
 	// DNS-over-HTTPS client.  If not set, HTTP/1.1 and HTTP/2 will be used.
 	HTTPVersions []HTTPVersion
 
-	// Timeout is the default upstream timeout.  It's also used as a timeout for
-	// bootstrap DNS requests.  Zero value disables the timeout.
+	// Timeout is the default upstream timeout and is also used for bootstrap
+	// DNS requests.  For DoT and DoH, a non-positive value is replaced with
+	// dialTimeout (10s) when constructing the upstream.  For other protocols
+	// and for bootstrap dialing, a zero value may still mean no timeout.
 	Timeout time.Duration
 
 	// InsecureSkipVerify disables verifying the server's certificate.
