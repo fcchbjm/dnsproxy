@@ -10,8 +10,8 @@ import (
 
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/fcchbjm/dnsproxy/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/internal/bootstrap"
-	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +61,7 @@ func TestNewUpstreamResolver(t *testing.T) {
 	ups := &dnsproxytest.Upstream{
 		OnAddress: func() (_ string) { panic(testutil.UnexpectedCall()) },
 		OnClose:   func() (_ error) { panic(testutil.UnexpectedCall()) },
-		OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
+		OnExchange: func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 			resp = (&dns.Msg{}).SetReply(req)
 			resp.Answer = []dns.RR{&dns.A{
 				Hdr: dns.RR_Header{
@@ -205,7 +205,7 @@ func TestCachingResolver_staleness(t *testing.T) {
 		fqdn = "test.fully.qualified.name."
 	)
 
-	onExchange := func(req *dns.Msg) (resp *dns.Msg, err error) {
+	onExchange := func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 		resp = (&dns.Msg{}).SetReply(req)
 
 		hdr := dns.RR_Header{

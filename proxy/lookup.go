@@ -13,7 +13,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-// helper struct to pass results of lookupIPAddr function
+// lookupResult represents the result of an IP address lookup.
 type lookupResult struct {
 	resp *dns.Msg
 	err  error
@@ -96,7 +96,7 @@ func (p *Proxy) LookupNetIP(
 		return addrs, errors.Join(errs...)
 	}
 
-	if p.Config.PreferIPv6 {
+	if p.preferIPv6 {
 		slices.SortStableFunc(addrs, netutil.PreferIPv6)
 	} else {
 		slices.SortStableFunc(addrs, netutil.PreferIPv4)

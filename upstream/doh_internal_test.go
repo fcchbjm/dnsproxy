@@ -97,7 +97,7 @@ func TestUpstreamDoH(t *testing.T) {
 
 			// Test that it responds properly.
 			for range 10 {
-				checkUpstream(t, u, address)
+				checkUpstream(t, u, address, testTimeout)
 			}
 
 			doh := testutil.RequireTypeAssert[*dnsOverHTTPS](t, u)
@@ -106,7 +106,7 @@ func TestUpstreamDoH(t *testing.T) {
 			doh.client = nil
 
 			// Force it to establish the connection again.
-			checkUpstream(t, u, address)
+			checkUpstream(t, u, address, testTimeout)
 
 			// Check that TLS session was resumed properly.
 			require.True(t, lastState.DidResume)
@@ -135,7 +135,7 @@ func TestUpstreamDoH_timeoutNormalized(t *testing.T) {
 		doh := testutil.RequireTypeAssert[*dnsOverHTTPS](t, u)
 		require.Equal(t, dialTimeout, doh.timeout)
 
-		client, err := doh.createClient()
+		client, err := doh.createClient(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, dialTimeout, client.Timeout)
 		require.Positive(t, client.Timeout)
@@ -158,7 +158,7 @@ func TestUpstreamDoH_timeoutNormalized(t *testing.T) {
 		doh := testutil.RequireTypeAssert[*dnsOverHTTPS](t, u)
 		require.Equal(t, custom, doh.timeout)
 
-		client, err := doh.createClient()
+		client, err := doh.createClient(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, custom, client.Timeout)
 	})
@@ -244,7 +244,7 @@ func TestUpstreamDoH_raceReconnect(t *testing.T) {
 			require.NoError(t, err)
 			testutil.CleanupAndRequireSuccess(t, u.Close)
 
-			checkRaceCondition(u)
+			checkRaceCondition(t, u)
 		})
 	}
 }
@@ -288,7 +288,7 @@ func TestUpstreamDoH_serverRestart(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				checkUpstream(t, u, upsAddr)
+				checkUpstream(t, u, upsAddr, testTimeout)
 			})
 			require.False(t, t.Failed())
 			testutil.CleanupAndRequireSuccess(t, u.Close)
@@ -299,12 +299,13 @@ func TestUpstreamDoH_serverRestart(t *testing.T) {
 					port:         int(addr.Port()),
 				})
 
-				checkUpstream(t, u, upsAddr)
+				checkUpstream(t, u, upsAddr, testTimeout)
 			})
 			require.False(t, t.Failed())
 
 			t.Run("retry", func(t *testing.T) {
-				_, err := u.Exchange(createTestMessage())
+				ctx := testutil.ContextWithTimeout(t, testTimeout)
+				_, err := u.Exchange(ctx, createTestMessage())
 				require.Error(t, err)
 
 				_ = startDoHServer(t, testDoHServerOptions{
@@ -312,7 +313,7 @@ func TestUpstreamDoH_serverRestart(t *testing.T) {
 					port:         int(addr.Port()),
 				})
 
-				checkUpstream(t, u, upsAddr)
+				checkUpstream(t, u, upsAddr, testTimeout)
 			})
 		})
 	}
@@ -342,7 +343,8 @@ func TestUpstreamDoH_0RTT(t *testing.T) {
 	req := createTestMessage()
 
 	// Trigger connection to a DoH3 server.
-	resp, err := uh.Exchange(req)
+	ctx := testutil.ContextWithTimeout(t, testTimeout)
+	resp, err := uh.Exchange(ctx, req)
 	require.NoError(t, err)
 	requireResponse(t, req, resp)
 
@@ -358,7 +360,8 @@ func TestUpstreamDoH_0RTT(t *testing.T) {
 	}()
 
 	// Trigger second connection.
-	resp, err = uh.Exchange(req)
+	ctx = testutil.ContextWithTimeout(t, testTimeout)
+	resp, err = uh.Exchange(ctx, req)
 	require.NoError(t, err)
 	requireResponse(t, req, resp)
 

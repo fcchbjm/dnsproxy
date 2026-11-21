@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ func TestFilteringHandler(t *testing.T) {
 	m := &sync.RWMutex{}
 	blockResponse := false
 
-	reqHandler := &TestHandler{
+	reqHandler := &testHandler{
 		OnHandle: func(ctx context.Context, p *Proxy, d *DNSContext) (err error) {
 			m.Lock()
 			defer m.Unlock()
@@ -41,28 +42,27 @@ func TestFilteringHandler(t *testing.T) {
 	// Prepare the proxy server.
 	dnsProxy := mustNew(t, &Config{
 		Logger:         testLogger,
-		TrustedProxies: defaultTrustedProxies,
-		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
+		UpstreamConfig: newTestUpstreamConfig(t, newTestUpstream(t)),
 		RequestHandler: reqHandler,
-		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 	})
 
-	servicetest.RequireRun(t, dnsProxy, testTimeout)
+	servicetest.RequireRun(t, dnsProxy, dnsproxytest.Timeout)
 
-	// Create a DNS-over-UDP client connection
-	addr := dnsProxy.Addr(ProtoUDP)
+	addr := dnsProxy.Addr(ProtoTCP)
 	client := &dns.Client{
-		Net:     string(ProtoUDP),
-		Timeout: testTimeout,
+		Net:     string(ProtoTCP),
+		Timeout: dnsproxytest.Timeout,
 	}
 
 	// Send the first message (not blocked)
-	req := newTestMessage()
+	req := dnsproxytest.NewTestRequest()
 
 	r, _, err := client.Exchange(req, addr.String())
 	require.NoError(t, err)
-	requireResponse(t, req, r)
+	dnsproxytest.RequireResponse(t, req, r)
 
 	// Now send the second and make sure it is blocked
 	m.Lock()

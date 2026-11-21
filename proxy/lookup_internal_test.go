@@ -2,51 +2,40 @@ package proxy
 
 import (
 	"context"
-	"net"
 	"net/netip"
-	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// testTimeout is a common timeout for tests.
+const testTimeout = 1 * time.Second
+
 func TestLookupNetIP(t *testing.T) {
-	resolverAddr := testDefaultUpstreamAddr
-	if v := os.Getenv("DNSPROXY_TEST_RESOLVER_IP"); v != "" {
-		resolverAddr = net.JoinHostPort(v, "53")
+	t.Parallel()
+
+	conf := &Config{
+		Logger:         testLogger,
+		UpstreamConfig: newTestUpstreamConfig(t, newTestUpstream(t)),
 	}
 
-	dnsUpstream, err := upstream.AddressToUpstream(
-		resolverAddr,
-		&upstream.Options{
-			Logger:  testLogger,
-			Timeout: defaultTimeout,
-		},
-	)
+	p, err := New(conf)
 	require.NoError(t, err)
 
-	p, err := New(&Config{
-		Logger: testLogger,
-		UpstreamConfig: &UpstreamConfig{
-			Upstreams: []upstream.Upstream{dnsUpstream},
-		},
-	})
-	require.NoError(t, err)
-
-	addrs, err := p.LookupNetIP(context.Background(), "", "dns.google")
+	ctx := testutil.ContextWithTimeout(t, testTimeout)
+	addrs, err := p.LookupNetIP(ctx, "", dnsproxytest.Host)
 	require.NoError(t, err)
 	require.NotEmpty(t, addrs)
 
-	assert.Contains(t, addrs, netip.MustParseAddr("8.8.8.8"))
-	assert.Contains(t, addrs, netip.MustParseAddr("8.8.4.4"))
-	if len(addrs) > 2 {
-		assert.Contains(t, addrs, netip.MustParseAddr("2001:4860:4860::8888"))
-		assert.Contains(t, addrs, netip.MustParseAddr("2001:4860:4860::8844"))
-	}
+	wantAddr := netip.AddrFrom4([4]byte(dnsproxytest.IPv4.To4()))
+	assert.Contains(t, addrs, wantAddr)
 }
 
 func TestLookupNetIP_usesRequestHandler(t *testing.T) {
@@ -63,7 +52,7 @@ func TestLookupNetIP_usesRequestHandler(t *testing.T) {
 		UpstreamConfig: &UpstreamConfig{
 			Upstreams: []upstream.Upstream{ups},
 		},
-		RequestHandler: &TestHandler{
+		RequestHandler: &testHandler{
 			OnHandle: func(_ context.Context, _ *Proxy, d *DNSContext) (err error) {
 				handlerCalls.Add(1)
 				d.Res = (&dns.Msg{}).SetReply(d.Req)
@@ -121,14 +110,19 @@ type countingTestUpstream struct {
 // type check
 var _ upstream.Upstream = (*countingTestUpstream)(nil)
 
-// Exchange implements the [upstream.Upstream] interface for *countingTestUpstream.
-func (u *countingTestUpstream) Exchange(m *dns.Msg) (resp *dns.Msg, err error) {
+// Exchange implements the [upstream.Upstream] interface for
+// *countingTestUpstream.
+func (u *countingTestUpstream) Exchange(
+	_ context.Context,
+	m *dns.Msg,
+) (resp *dns.Msg, err error) {
 	u.n.Add(1)
 
 	return (&dns.Msg{}).SetReply(m), nil
 }
 
-// Address implements the [upstream.Upstream] interface for *countingTestUpstream.
+// Address implements the [upstream.Upstream] interface for
+// *countingTestUpstream.
 func (u *countingTestUpstream) Address() (addr string) { return "counting-test" }
 
 // Close implements the [upstream.Upstream] interface for *countingTestUpstream.

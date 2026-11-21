@@ -18,6 +18,7 @@ import (
 // unit is the convenient alias for struct{}.
 type unit = struct{}
 
+// TODO(m.kazantsev):  Find a way to move to ping_test.go.
 func TestFastestAddr_PingAll_timeout(t *testing.T) {
 	t.Run("isolated", func(t *testing.T) {
 		f := New(&Config{Logger: slogutil.NewDiscardLogger()})
@@ -30,7 +31,9 @@ func TestFastestAddr_PingAll_timeout(t *testing.T) {
 		}
 
 		ip := netutil.IPv4Localhost()
-		res := f.pingAll("", []netip.Addr{ip, ip})
+
+		ctx := testutil.ContextWithTimeout(t, dnsproxytest.Timeout)
+		res := f.pingAll(ctx, "", []netip.Addr{ip, ip})
 		require.Nil(t, res)
 
 		waitCh <- unit{}
@@ -52,7 +55,8 @@ func TestFastestAddr_PingAll_timeout(t *testing.T) {
 			return nil
 		}
 
-		res := f.pingAll("", []netip.Addr{ip1, ip2})
+		ctx := testutil.ContextWithTimeout(t, dnsproxytest.Timeout)
+		res := f.pingAll(ctx, "", []netip.Addr{ip1, ip2})
 		require.NotNil(t, res)
 
 		assert.True(t, res.success)
@@ -83,7 +87,8 @@ func TestFastestAddr_PingAll_cache(t *testing.T) {
 		f := New(&Config{Logger: slogutil.NewDiscardLogger()})
 		f.cacheAddFailure(ip)
 
-		res := f.pingAll("", []netip.Addr{ip, ip})
+		ctx := testutil.ContextWithTimeout(t, dnsproxytest.Timeout)
+		res := f.pingAll(ctx, "", []netip.Addr{ip, ip})
 		require.Nil(t, res)
 	})
 
@@ -93,7 +98,8 @@ func TestFastestAddr_PingAll_cache(t *testing.T) {
 		f := New(&Config{Logger: slogutil.NewDiscardLogger()})
 		f.cacheAddSuccessful(ip, lat)
 
-		res := f.pingAll("", []netip.Addr{ip, ip})
+		ctx := testutil.ContextWithTimeout(t, dnsproxytest.Timeout)
+		res := f.pingAll(ctx, "", []netip.Addr{ip, ip})
 		require.NotNil(t, res)
 		assert.True(t, res.success)
 		assert.Equal(t, lat, res.latency)
@@ -125,95 +131,13 @@ func TestFastestAddr_PingAll_cache(t *testing.T) {
 			return nil
 		}
 
-		res := f.pingAll("", ips)
+		ctx := testutil.ContextWithTimeout(t, dnsproxytest.Timeout)
+		res := f.pingAll(ctx, "", ips)
 		require.NotNil(t, res)
 
 		assert.True(t, res.success)
 		assertCaching(t, f, ip, 0)
 
 		wg.Wait()
-	})
-}
-
-// listen is a helper function that creates a new listener on ip for t.
-func listen(t *testing.T, ip netip.Addr) (port uint) {
-	t.Helper()
-
-	l, err := net.Listen("tcp", netip.AddrPortFrom(ip, 0).String())
-	require.NoError(t, err)
-	testutil.CleanupAndRequireSuccess(t, l.Close)
-
-	return uint(l.Addr().(*net.TCPAddr).Port)
-}
-
-func TestFastestAddr_PingAll(t *testing.T) {
-	ip := netutil.IPv4Localhost()
-
-	t.Run("single", func(t *testing.T) {
-		f := New(&Config{Logger: slogutil.NewDiscardLogger()})
-		res := f.pingAll("", []netip.Addr{ip})
-		require.NotNil(t, res)
-
-		assert.True(t, res.success)
-		assert.Equal(t, ip, res.addrPort.Addr())
-		// There was no ping so the port is zero.
-		assert.Zero(t, res.addrPort.Port())
-
-		// Nothing in the cache since there was no ping.
-		ce := f.cacheFind(res.addrPort.Addr())
-		require.Nil(t, ce)
-	})
-
-	t.Run("fastest", func(t *testing.T) {
-		fastPort := listen(t, ip)
-		slowPort := listen(t, ip)
-
-		ctrlCh := make(chan unit, 1)
-
-		f := New(&Config{Logger: slogutil.NewDiscardLogger()})
-		f.pingPorts = []uint{
-			fastPort,
-			slowPort,
-		}
-		f.pinger.Control = func(_, address string, _ syscall.RawConn) error {
-			addrPort := netip.MustParseAddrPort(address)
-			require.Contains(t, []uint{fastPort, slowPort}, uint(addrPort.Port()))
-			if addrPort.Port() == uint16(fastPort) {
-				return nil
-			}
-
-			<-ctrlCh
-
-			return nil
-		}
-
-		ips := []netip.Addr{ip, ip}
-		res := f.pingAll("", ips)
-		ctrlCh <- unit{}
-
-		require.NotNil(t, res)
-
-		assert.True(t, res.success)
-		assert.Equal(t, ip, res.addrPort.Addr())
-		assert.EqualValues(t, fastPort, res.addrPort.Port())
-
-		assertCaching(t, f, ip, 0)
-	})
-
-	t.Run("zero", func(t *testing.T) {
-		res := New(&Config{Logger: slogutil.NewDiscardLogger()}).pingAll("", nil)
-		require.Nil(t, res)
-	})
-
-	t.Run("fail", func(t *testing.T) {
-		port := dnsproxytest.NewFreePort(t)
-
-		f := New(&Config{Logger: slogutil.NewDiscardLogger()})
-		f.pingPorts = []uint{port}
-
-		res := f.pingAll("test", []netip.Addr{ip, ip})
-		require.Nil(t, res)
-
-		assertCaching(t, f, ip, 1)
 	})
 }

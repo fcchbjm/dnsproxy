@@ -59,7 +59,7 @@ docker pull ghcr.io/fcchbjm/dnsproxy:latest
   - `--tcp-proxy-protocol-v2`：对 DNS-over-TCP 监听端严格要求 PPv2。
   - `--tls-proxy-protocol-v2`：对 DoT 监听端严格要求 PPv2（PPv2 在 TLS 握手之前解析；缺失即拒绝）。
   - `--proxy-protocol-v2-read-timeout=duration`：新建 TCP/DoT 连接上读取 PPv2 前缀和负载的超时（默认 `3s`）。
-- **YAML（见 `config.yaml.dist`）**
+- **YAML（见 `config.dist.yaml`）**
   - `tcp-proxy-protocol-v2: true|false`
   - `tls-proxy-protocol-v2: true|false`
   - `proxy-protocol-v2-read-timeout: 3s`
@@ -100,7 +100,7 @@ Standalone `dnsproxy` 默认将 `TrustedProxies` 设为 **空集**（不信任�
 LB / 反代部署须显式配置：
 
 - CLI：`--trusted-proxies=10.0.0.0/8`（可重复）；同机 HAProxy → `127.0.0.0/8`（需要时再加 `::1/128`）——见下方最小示例
-- YAML：`trusted-proxies: ["10.0.0.0/8", ...]`（见 `config.yaml.dist`）
+- YAML：`trusted-proxies: ["10.0.0.0/8", ...]`（见 `config.dist.yaml`）
 
 同时：
 
@@ -174,7 +174,7 @@ QUIC/UDP 的语义与代价模型不同（逐包语义、地址验证、connecti
 - **配置**：`--tls-timeout` / YAML `tls-timeout`。
 - **默认值（双层，与 TrustedProxies 同构）**：
   - **库 / 嵌入宿主**：`proxy.Config.TLSTimeout` 为零 → **600s**（`DefaultTLSTimeout`），保持嵌入兼容。
-  - **Standalone `dnsproxy`**：显式默认 **60s**（`config.yaml.dist` / cmd 种子）。相对历史二进制默认 600s，这是**有意破坏**，请写入发行说明。
+  - **Standalone `dnsproxy`**：显式默认 **60s**（`config.dist.yaml` / cmd 种子）。相对历史二进制默认 600s，这是**有意破坏**，请写入发行说明。
 - **关键语义**：
   - DoT 在 idle 期间采用 **read deadline**（而非 full deadline），避免把响应写入绑定到空闲读窗口，导致长连接在边界条件下被过早 teardown。
   - TLS 握手阶段也有显式 deadline，避免“连接建立但不发送数据”长期占用连接处理协程与资源。
@@ -216,11 +216,11 @@ Standalone 将 `--tls-timeout` / `tls-timeout` 默认设为 **60s**。嵌入宿�
 
 ### TCP/DoT 连接上限（opt-in）
 
-`--max-tcp-connections` / `max-tcp-connections` 在 `Accept` 之后、请求处理之前限制并发 **已接受** 的明文 TCP 与 DoT 连接。**默认 0 = 不限制**（库与 Standalone 相同）。与 `--max-go-routines`（在途 DNS 处理）正交。公网部署建议显式设置（例如 `512`）；见 `config.yaml.dist`。
+`--max-tcp-connections` / `max-tcp-connections` 在 `Accept` 之后、请求处理之前限制并发 **已接受** 的明文 TCP 与 DoT 连接。**默认 0 = 不限制**（库与 Standalone 相同）。与 `--max-go-routines`（在途 DNS 处理）正交。公网部署建议显式设置（例如 `512`）；见 `config.dist.yaml`。
 
 ### DoH 并发上限（opt-in）
 
-`--doh-max-concurrent` / `doh-max-concurrent` 限制 `Proxy.ServeHTTP` 上的在途 DoH（HTTP/1.1 / HTTP/2 / HTTP/3 共用）。**默认 0 = 不限制**。满额返回 **HTTP 429** 并带 `Retry-After: 1`。与 `--max-go-routines`、`--max-tcp-connections` 正交。公网建议显式设置（例如 `256`）；见 `config.yaml.dist`。嵌入宿主若只把 `ServeHTTP` 挂到自管 `http.Server`，只要设置了 `HTTPConfig.MaxConcurrentRequests` 即同样生效。
+`--doh-max-concurrent` / `doh-max-concurrent` 限制 `Proxy.ServeHTTP` 上的在途 DoH（HTTP/1.1 / HTTP/2 / HTTP/3 共用）。**默认 0 = 不限制**。满额返回 **HTTP 429** 并带 `Retry-After: 1`。与 `--max-go-routines`、`--max-tcp-connections` 正交。公网建议显式设置（例如 `256`）；见 `config.dist.yaml`。嵌入宿主若只把 `ServeHTTP` 挂到自管 `http.Server`，只要设置了 `HTTPConfig.MaxConcurrentRequests` 即同样生效。
 
 ### 乐观缓存与 hosts 文件
 
@@ -234,7 +234,7 @@ Standalone 将 `--tls-timeout` / `tls-timeout` 默认设为 **60s**。嵌入宿�
 
 自行构造 `ratelimit.Config` / `NewMiddleware` 的嵌入方须设置 **`MaxSize > 0`**（例如 `ratelimit.DefaultMaxSize`）；为 0 时校验失败。
 
-Standalone 默认 `ratelimit-subnet-len-ipv6` 为 **64**（与 `config.yaml.dist` 一致）；升级时若此前依赖隐式 **56** 且未显式配置该选项，IPv6 限流聚合会更细——需在 YAML/CLI 中显式设回以保留旧行为。
+Standalone 默认 `ratelimit-subnet-len-ipv6` 为 **64**（与 `config.dist.yaml` 一致）；升级时若此前依赖隐式 **56** 且未显式配置该选项，IPv6 限流聚合会更细——需在 YAML/CLI 中显式设回以保留旧行为。
 
 ### `--doh-insecure-enabled` 含义
 
@@ -320,7 +320,7 @@ Usage of ./dnsproxy:
   --cache-size=int
         Cache size (in bytes). Default: 64k.
   --config-path=path
-        YAML configuration file. Minimal working configuration in config.yaml.dist. Options passed through command line will override the ones from this file.
+        YAML configuration file. Minimal working configuration in config.dist.yaml. Options passed through command line will override the ones from this file.
   --doh-insecure-enabled
         Allow unencrypted HTTP DoH (plain HTTP to the DoH listener). Does not skip TLS certificate verification; use --insecure for that.
   --doh-routes

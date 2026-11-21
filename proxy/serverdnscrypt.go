@@ -14,18 +14,18 @@ import (
 
 // initDNSCryptServers initializes the DNSCrypt servers.
 func (p *Proxy) initDNSCryptServers(ctx context.Context) (err error) {
-	if len(p.DNSCryptUDPListenAddr) == 0 && len(p.DNSCryptTCPListenAddr) == 0 {
+	if len(p.dnsCryptUDPListenAddr) == 0 && len(p.dnsCryptTCPListenAddr) == 0 {
 		// Do nothing if DNSCrypt listen addresses are not specified.
 		return nil
 	}
 
-	if p.DNSCryptResolverCert == nil || p.DNSCryptProviderName == "" {
+	if p.dnsCryptResolverCert == nil || p.dnsCryptProviderName == "" {
 		return errors.Error("invalid dnscrypt configuration: no certificate or provider name")
 	}
 
-	p.logger.InfoContext(ctx, "initializing dnscrypt", "provider", p.DNSCryptProviderName)
+	p.logger.InfoContext(ctx, "initializing dnscrypt", "provider", p.dnsCryptProviderName)
 
-	for _, addr := range p.DNSCryptUDPListenAddr {
+	for _, addr := range p.dnsCryptUDPListenAddr {
 		s, sErr := p.newDNSCryptServer(ctx, netutil.NetAddrToAddrPort(addr), dnscrypt.ProtoUDP)
 		if sErr != nil {
 			return fmt.Errorf("listening to dnscrypt udp on addr %s: %w", addr, sErr)
@@ -34,7 +34,7 @@ func (p *Proxy) initDNSCryptServers(ctx context.Context) (err error) {
 		p.dnsCryptServers = append(p.dnsCryptServers, s)
 	}
 
-	for _, addr := range p.DNSCryptTCPListenAddr {
+	for _, addr := range p.dnsCryptTCPListenAddr {
 		s, sErr := p.newDNSCryptServer(ctx, netutil.NetAddrToAddrPort(addr), dnscrypt.ProtoTCP)
 		if sErr != nil {
 			return fmt.Errorf("listening to dnscrypt tcp on addr %s: %w", addr, sErr)
@@ -69,7 +69,7 @@ func (p *Proxy) startDNSCryptServers(ctx context.Context) (err error) {
 }
 
 // shutdownDNSCryptServers shuts down the DNSCrypt servers.  If it returns an
-// error, some servers may be still running.
+// error, some servers may be still running.  srvs elements must not be nil.
 func shutdownDNSCryptServers(ctx context.Context, srvs []*dnscrypt.Server) (err error) {
 	var errs []error
 
@@ -84,7 +84,7 @@ func shutdownDNSCryptServers(ctx context.Context, srvs []*dnscrypt.Server) (err 
 }
 
 // newDNSCryptServer returns a new DNSCrypt server for the given address and
-// protocol.
+// protocol.  proto must be either [dnscrypt.ProtoTCP] or [dnscrypt.ProtoUDP].
 func (p *Proxy) newDNSCryptServer(
 	ctx context.Context,
 	addr netip.AddrPort,
@@ -97,9 +97,9 @@ func (p *Proxy) newDNSCryptServer(
 			proxy:   p,
 			reqSema: p.requestsSema,
 		},
-		ResolverCert: p.DNSCryptResolverCert,
+		ResolverCert: p.dnsCryptResolverCert,
 		Logger:       p.logger,
-		ProviderName: p.DNSCryptProviderName,
+		ProviderName: p.dnsCryptProviderName,
 		Addr:         addr,
 		Proto:        proto,
 	})

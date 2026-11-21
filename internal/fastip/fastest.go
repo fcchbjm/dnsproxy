@@ -4,6 +4,7 @@
 package fastip
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -11,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AdguardTeam/golibs/cache"
+	"github.com/AdguardTeam/golibs/cache/bytecache"
 	"github.com/AdguardTeam/golibs/container"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
@@ -19,12 +20,14 @@ import (
 	"github.com/miekg/dns"
 )
 
-// LogPrefix is a prefix for logging.
-const LogPrefix = "fastip"
+const (
+	// defaultLogPrefix is the default prefix for logging.
+	defaultLogPrefix = "fastip"
 
-// DefaultPingWaitTimeout is the default period of time for waiting ping
-// operations to finish.
-const DefaultPingWaitTimeout = 1 * time.Second
+	// defaultPingWaitTimeout is the default period of time for waiting ping
+	// operations to finish.
+	defaultPingWaitTimeout = 1 * time.Second
+)
 
 // FastestAddr provides methods to determine the fastest network addresses.
 type FastestAddr struct {
@@ -38,7 +41,7 @@ type FastestAddr struct {
 	ipCacheLock *sync.Mutex
 
 	// ipCache caches fastest IP addresses.
-	ipCache cache.Cache
+	ipCache bytecache.Interface
 
 	// pingPorts are the ports to ping on.
 	pingPorts []uint
@@ -65,9 +68,8 @@ type Config struct {
 func New(c *Config) (f *FastestAddr) {
 	f = &FastestAddr{
 		ipCacheLock: &sync.Mutex{},
-		ipCache: cache.New(cache.Config{
-			MaxSize:   64 * 1024,
-			EnableLRU: true,
+		ipCache: bytecache.NewDefault(&bytecache.DefaultConfig{
+			MaxSize: 64 * 1024,
 		}),
 		pingPorts: []uint{80, 443},
 		pinger:    &net.Dialer{Timeout: pingTCPTimeout},
@@ -76,13 +78,13 @@ func New(c *Config) (f *FastestAddr) {
 	if c.PingWaitTimeout > 0 {
 		f.pingWaitTimeout = c.PingWaitTimeout
 	} else {
-		f.pingWaitTimeout = DefaultPingWaitTimeout
+		f.pingWaitTimeout = defaultPingWaitTimeout
 	}
 
 	if c.Logger != nil {
 		f.logger = c.Logger
 	} else {
-		f.logger = slog.Default().With(slogutil.KeyPrefix, LogPrefix)
+		f.logger = slog.Default().With(slogutil.KeyPrefix, defaultLogPrefix)
 	}
 
 	return f
@@ -92,10 +94,11 @@ func New(c *Config) (f *FastestAddr) {
 // the fastest IP address.  The fastest IP address is considered to be the first
 // one successfully dialed and other addresses are removed from the answer.
 func (f *FastestAddr) ExchangeFastest(
+	ctx context.Context,
 	req *dns.Msg,
 	ups []upstream.Upstream,
 ) (resp *dns.Msg, u upstream.Upstream, err error) {
-	replies, err := upstream.ExchangeAll(ups, req)
+	replies, err := upstream.ExchangeAll(ctx, ups, req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -112,11 +115,11 @@ func (f *FastestAddr) ExchangeFastest(
 
 	ips := ipSet.Values()
 	host := strings.ToLower(req.Question[0].Name)
-	if pingRes := f.pingAll(host, ips); pingRes != nil {
+	if pingRes := f.pingAll(ctx, host, ips); pingRes != nil {
 		return f.prepareReply(pingRes, replies)
 	}
 
-	f.logger.Debug("no fastest ip found, using the first response", "host", host)
+	f.logger.DebugContext(ctx, "no fastest ip found, using the first response", "host", host)
 
 	return replies[0].Resp, replies[0].Upstream, nil
 }

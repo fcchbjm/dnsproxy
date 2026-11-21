@@ -51,14 +51,18 @@ func newTLSConfig(conf *configuration) (c *tls.Config, err error) {
 	}
 
 	// #nosec G402 -- TLS MinVersion is configured by user.
-	return &tls.Config{
+	c = &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   uint16(tlsMinVersion),
 		MaxVersion:   uint16(tlsMaxVersion),
-		// Session tickets stay enabled (SessionTicketsDisabled defaults to
-		// false).  SessionTicketKey encrypts tickets for resumption.
-		SessionTicketKey: sessionTicketKey,
-	}, nil
+	}
+
+	// Session tickets stay enabled (SessionTicketsDisabled defaults to false).
+	// The session ticket key encrypts tickets for resumption and, being random
+	// for every process, prevents resuming sessions across restarts.
+	c.SetSessionTicketKeys([][32]byte{sessionTicketKey})
+
+	return c, nil
 }
 
 // loadX509KeyPair reads and parses a public/private key pair from a pair of

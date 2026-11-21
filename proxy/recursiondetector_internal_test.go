@@ -87,7 +87,7 @@ func TestRecursionDetector_Suspect(t *testing.T) {
 	testCases := []struct {
 		msg  *dns.Msg
 		name string
-		want int
+		want uint64
 	}{{
 		msg: &dns.Msg{
 			MsgHdr: dns.MsgHdr{

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,16 +19,16 @@ func TestProxy_TrustedProxies_nilNormalized(t *testing.T) {
 
 	p := mustNew(t, &Config{
 		Logger:         testLogger,
-		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
 		TrustedProxies: nil,
 	})
 
-	require.NotNil(t, p.TrustedProxies)
+	require.NotNil(t, p.trustedProxies)
 	require.NotPanics(t, func() {
-		assert.False(t, p.TrustedProxies.Contains(netip.MustParseAddr("127.0.0.1")))
-		assert.False(t, p.TrustedProxies.Contains(netip.MustParseAddr("8.8.8.8")))
-		assert.False(t, p.TrustedProxies.Contains(netip.MustParseAddr("::1")))
+		assert.False(t, p.trustedProxies.Contains(netip.MustParseAddr("127.0.0.1")))
+		assert.False(t, p.trustedProxies.Contains(netip.MustParseAddr("8.8.8.8")))
+		assert.False(t, p.trustedProxies.Contains(netip.MustParseAddr("::1")))
 	})
 }
 
@@ -67,10 +68,10 @@ func TestProxy_TrustedProxies_nilDoHIgnoresForwardingHeaders(t *testing.T) {
 			dnsProxy := mustNew(t, &Config{
 				Logger:         testLogger,
 				TLSConfig:      tlsConf,
-				TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+				TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 				UpstreamConfig: newLocalPlainUpstreamConfig(t),
 				TrustedProxies: nil,
-				RequestHandler: &TestHandler{
+				RequestHandler: &testHandler{
 					OnHandle: func(_ context.Context, _ *Proxy, d *DNSContext) (err error) {
 						gotAddr = d.Addr.Addr()
 						d.Res = replyWithTestA(d.Req)
@@ -79,11 +80,11 @@ func TestProxy_TrustedProxies_nilDoHIgnoresForwardingHeaders(t *testing.T) {
 					},
 				},
 				HTTPConfig: &HTTPConfig{
-					ListenAddresses: []netip.AddrPort{localhostAnyPort},
+					ListenAddresses: []netip.AddrPort{dnsproxytest.LocalhostAnyPort},
 				},
 			})
-			require.NotNil(t, dnsProxy.TrustedProxies)
-			require.False(t, dnsProxy.TrustedProxies.Contains(tc.want))
+			require.NotNil(t, dnsProxy.trustedProxies)
+			require.False(t, dnsProxy.trustedProxies.Contains(tc.want))
 
 			servicetest.RequireRun(t, dnsProxy, testTimeout)
 

@@ -1,170 +1,163 @@
-package proxy
+package proxy_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
+	"encoding/binary"
 	"io"
-	"log/slog"
-	"math/big"
 	"net"
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/AdguardTeam/golibs/testutil/servicetest"
+	"github.com/fcchbjm/dnsproxy/dnsproxytest"
+	proxytest "github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
+	"github.com/fcchbjm/dnsproxy/proxy"
+	"github.com/fcchbjm/dnsproxy/upstream"
+	"github.com/miekg/dns"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-type countingConn struct {
-	net.Conn
+func TestProxy_HandleDNSRequest_tcp(t *testing.T) {
+	dnsProxy := mustStartDefaultProxy(t)
 
-	mu           sync.Mutex
-	writeCalls   int
-	bytesWritten int
+	// Create a DNS-over-TCP client connection
+	addr := dnsProxy.Addr(proxy.ProtoTCP)
+	conn, err := dns.Dial("tcp", addr.String())
+	require.NoError(t, err)
+
+	sendTestMessages(t, conn)
 }
 
-func (c *countingConn) Write(p []byte) (n int, err error) {
-	n, err = c.Conn.Write(p)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writeCalls++
-	c.bytesWritten += n
-	return n, err
+func TestProxy_HandleDNSRequest_tls(t *testing.T) {
+	serverConfig, caPem := proxytest.NewTLSConfig(t)
+	dnsProxy, err := proxy.New(&proxy.Config{
+		Logger:         testLogger,
+		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(proxytest.LocalhostAnyPort)},
+		QUICListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(proxytest.LocalhostAnyPort)},
+		TLSConfig:      serverConfig,
+		UpstreamConfig: newTestUpstreamConfig(t),
+		TrustedProxies: proxytest.DefaultTrustedProxies,
+	})
+	require.NoError(t, err)
+
+	servicetest.RequireRun(t, dnsProxy, proxytest.Timeout)
+
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPem)
+	tlsConfig := &tls.Config{ServerName: proxytest.TLSServerName, RootCAs: roots}
+
+	// Create a DNS-over-TLS client connection
+	addr := dnsProxy.Addr(proxy.ProtoTLS)
+	conn, err := dns.DialWithTLS("tcp-tls", addr.String(), tlsConfig)
+	require.NoError(t, err)
+
+	sendTestMessages(t, conn)
 }
 
-func (c *countingConn) stats() (calls, bytes int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.writeCalls, c.bytesWritten
+func TestProxy_handleDNSRequest_splitTCPPrefix(t *testing.T) {
+	t.Parallel()
+
+	addr := mustStartDefaultProxy(t).Addr(proxy.ProtoTCP)
+	conn := requireDial(t, addr, proxytest.Timeout)
+
+	req := proxytest.NewTestRequest()
+
+	require.True(t, t.Run("send", func(t *testing.T) {
+		b, err := req.Pack()
+		require.NoError(t, err)
+
+		pkt := make([]byte, 0, 2+len(b))
+		pkt = binary.BigEndian.AppendUint16(pkt, uint16(len(b)))
+		pkt = append(pkt, b...)
+
+		n, err := conn.Write(pkt[:1])
+		require.NoError(t, err)
+
+		assert.Equal(t, 1, n)
+
+		time.Sleep(proxytest.Timeout / 10)
+
+		n, err = conn.Write(pkt[1:])
+		require.NoError(t, err)
+
+		assert.Equal(t, len(pkt)-1, n)
+	}))
+
+	require.True(t, t.Run("receive", func(t *testing.T) {
+		dnsConn := &dns.Conn{Conn: conn}
+
+		resp, err := dnsConn.ReadMsg()
+		require.NoError(t, err)
+
+		proxytest.RequireResponse(t, req, resp)
+	}))
 }
 
-func newTestTLSConfig(t *testing.T) *tls.Config {
-	t.Helper()
+func TestProxy_handleDNSRequest_emptyTCPMessage(t *testing.T) {
+	t.Parallel()
 
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
-	if err != nil {
-		t.Fatalf("serial: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName: "dnsproxy-test",
+	u := &dnsproxytest.Upstream{
+		OnExchange: func(ctx context.Context, m *dns.Msg) (_ *dns.Msg, _ error) {
+			panic(testutil.UnexpectedCall(ctx, m))
 		},
-		NotBefore: time.Now().Add(-time.Hour),
-		NotAfter:  time.Now().Add(time.Hour),
-		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{
-			x509.ExtKeyUsageServerAuth,
-		},
+		OnAddress: func() (_ string) { panic(testutil.UnexpectedCall()) },
+		OnClose:   func() (err error) { return nil },
+	}
+	upsConf := &proxy.UpstreamConfig{
+		Upstreams: []upstream.Upstream{u},
 	}
 
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
+	p, err := proxy.New(&proxy.Config{
+		Logger:         testLogger,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(proxytest.LocalhostAnyPort)},
+		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(proxytest.LocalhostAnyPort)},
+		UpstreamConfig: upsConf,
+		TrustedProxies: proxytest.DefaultTrustedProxies,
+	})
+	require.NoError(t, err)
+	servicetest.RequireRun(t, p, proxytest.Timeout)
 
-	cert := tls.Certificate{
-		Certificate: [][]byte{der},
-		PrivateKey:  priv,
-	}
+	conn := requireDial(t, p.Addr(proxy.ProtoTCP), proxytest.Timeout)
 
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}
+	pkt := binary.BigEndian.AppendUint16(nil, 0)
+
+	_, err = conn.Write(pkt)
+	require.NoError(t, err)
+
+	dnsConn := &dns.Conn{Conn: conn}
+	_, err = dnsConn.ReadMsg()
+	assert.ErrorIs(t, err, io.EOF)
 }
 
-func newTestProxy() *Proxy {
-	return &Proxy{
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-}
+func TestProxy_handleDNSRequest_partialTCPPrefix(t *testing.T) {
+	t.Parallel()
 
-func tlsPair(t *testing.T) (serverTLS *tls.Conn, serverRaw *countingConn, clientTLS *tls.Conn, cleanup func()) {
-	t.Helper()
+	addr := mustStartDefaultProxy(t).Addr(proxy.ProtoTCP)
 
-	srv, cli := net.Pipe()
+	t.Run("bad_conn", func(t *testing.T) {
+		t.Parallel()
 
-	serverRaw = &countingConn{Conn: srv}
-	serverTLS = tls.Server(serverRaw, newTestTLSConfig(t))
-	clientTLS = tls.Client(cli, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12})
+		conn := requireDial(t, addr, proxytest.Timeout)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+		n, err := conn.Write([]byte{0x00})
+		require.NoError(t, err)
 
-	var serverErr, clientErr error
-	go func() {
-		defer wg.Done()
-		serverErr = serverTLS.Handshake()
-	}()
-	go func() {
-		defer wg.Done()
-		clientErr = clientTLS.Handshake()
-	}()
-	wg.Wait()
+		assert.Equal(t, 1, n)
+	})
 
-	if serverErr != nil {
-		t.Fatalf("server handshake: %v", serverErr)
-	}
-	if clientErr != nil {
-		t.Fatalf("client handshake: %v", clientErr)
-	}
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
 
-	cleanup = func() {
-		_ = clientTLS.Close()
-		_ = serverTLS.Close()
-	}
+		// TODO(e.burkov):  Improve the [sendTestMessages] helper to fit into
+		// [proxytest.Timeout].
+		conn := requireDial(t, addr, 2*proxytest.Timeout)
 
-	return serverTLS, serverRaw, clientTLS, cleanup
-}
+		dnsConn := &dns.Conn{Conn: conn}
 
-func TestShutdownTCPConnGracefully_TLS_ClientInitiatedClose_SkipsTLSCloseNotify(t *testing.T) {
-	p := newTestProxy()
-
-	serverTLS, raw, clientTLS, cleanup := tlsPair(t)
-	defer cleanup()
-
-	// Close the client side gracefully first; the server-side shutdown should
-	// avoid sending its own close_notify once clientInitiatedClose is known.
-	_ = clientTLS.Close()
-
-	// Reset stats after handshake and the client's close_notify.
-	raw.mu.Lock()
-	raw.writeCalls = 0
-	raw.bytesWritten = 0
-	raw.mu.Unlock()
-
-	p.shutdownTCPConnGracefully(context.Background(), serverTLS, ProtoTLS, true)
-
-	calls, bytes := raw.stats()
-	if calls != 0 || bytes != 0 {
-		t.Fatalf("expected no server TLS writes after client-initiated close, got calls=%d bytes=%d", calls, bytes)
-	}
-}
-
-func TestShutdownTCPConnGracefully_TLS_DefaultPath_SendsTLSCloseNotify(t *testing.T) {
-	p := newTestProxy()
-
-	serverTLS, raw, _, cleanup := tlsPair(t)
-	defer cleanup()
-
-	// Reset stats after handshake.
-	raw.mu.Lock()
-	raw.writeCalls = 0
-	raw.bytesWritten = 0
-	raw.mu.Unlock()
-
-	p.shutdownTCPConnGracefully(context.Background(), serverTLS, ProtoTLS, false)
-
-	calls, bytes := raw.stats()
-	if calls == 0 {
-		t.Fatalf("expected server TLS close_notify write on default path, got calls=%d bytes=%d", calls, bytes)
-	}
+		sendTestMessages(t, dnsConn)
+	})
 }

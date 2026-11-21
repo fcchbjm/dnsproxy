@@ -1,14 +1,14 @@
 package proxy_test
 
 import (
+	"context"
 	"net"
-	"net/netip"
 	"testing"
 
 	"github.com/AdguardTeam/golibs/errors"
-	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/testutil"
-	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
+	"github.com/fcchbjm/dnsproxy/dnsproxytest"
+	proxytest "github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/proxy"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
@@ -16,24 +16,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCollectQueryStats(t *testing.T) {
-	var (
-		testReq = &dns.Msg{
-			Question: []dns.Question{{
-				Name:   "test.",
-				Qtype:  dns.TypeA,
-				Qclass: dns.ClassINET,
-			}},
-		}
+func TestDNSContext_QueryStatistics(t *testing.T) {
+	t.Parallel()
 
-		defaultTrustedProxies netutil.SubnetSet = netutil.SliceSubnetSet{
-			netip.MustParsePrefix("0.0.0.0/0"),
-			netip.MustParsePrefix("::0/0"),
-		}
-	)
+	testReq := &dns.Msg{
+		Question: []dns.Question{{
+			Name:   "test.",
+			Qtype:  dns.TypeA,
+			Qclass: dns.ClassINET,
+		}},
+	}
 
 	ups := &dnsproxytest.Upstream{
-		OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
+		OnExchange: func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 			return (&dns.Msg{}).SetReply(req), nil
 		},
 		OnAddress: func() (addr string) { return "upstream" },
@@ -41,7 +36,7 @@ func TestCollectQueryStats(t *testing.T) {
 	}
 
 	failUps := &dnsproxytest.Upstream{
-		OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
+		OnExchange: func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 			return nil, errors.Error("exchange error")
 		},
 		OnAddress: func() (addr string) { return "fail.upstream" },
@@ -50,9 +45,9 @@ func TestCollectQueryStats(t *testing.T) {
 
 	conf := &proxy.Config{
 		Logger:         testLogger,
-		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-		TrustedProxies: defaultTrustedProxies,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(proxytest.LocalhostAnyPort)},
+		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(proxytest.LocalhostAnyPort)},
+		TrustedProxies: proxytest.DefaultTrustedProxies,
 	}
 
 	testCases := []struct {

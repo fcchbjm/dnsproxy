@@ -5,6 +5,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -84,7 +85,7 @@ func TestWithRetry(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx := testutil.ContextWithTimeout(t, testTimeout)
+			ctx := testutil.ContextWithTimeout(t, dnsproxytest.Timeout)
 
 			err := p.bindWithRetry(ctx, tc.f)
 			assert.ErrorIs(t, err, tc.wantErr)

@@ -19,11 +19,11 @@ type pendingRequests interface {
 	// request is completed, or until ctx is canceled.  On cancel it returns
 	// loaded=true and ctx.Err(); the caller must not call done.  On a completed
 	// peer it returns loaded=true and the error that occurred during that
-	// peer's resolution (which may be nil).
+	// peer's resolution (which may be nil).  dctx must not be nil.
 	queue(ctx context.Context, dctx *DNSContext) (loaded bool, err error)
 
 	// done must be called after the request is completed, if queue returned
-	// false for it.
+	// false for it.  dctx must not be nil.
 	done(ctx context.Context, dctx *DNSContext, err error)
 }
 

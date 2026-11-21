@@ -17,6 +17,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/require"
 )
@@ -36,11 +37,11 @@ func TestProxy_tls(t *testing.T) {
 	serverConfig, caPem := newTLSConfig(t)
 	dnsProxy := mustNew(t, &Config{
 		Logger:         testLogger,
-		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-		QUICListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		QUICListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:      serverConfig,
-		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies: defaultTrustedProxies,
+		UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 	})
 
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
@@ -60,9 +61,9 @@ func TestProxy_tls(t *testing.T) {
 func TestProxy_tcpProxyProtocolV2_RequiredHeader(t *testing.T) {
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
-		TCPListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-		UpstreamConfig:            newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies:            defaultTrustedProxies,
+		TCPListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		UpstreamConfig:            newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies:            dnsproxytest.DefaultTrustedProxies,
 		TCPProxyProtocolV2Enabled: true,
 	})
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
@@ -120,16 +121,16 @@ func TestProxy_tcpProxyProtocolV2_DisabledRejectsHeader(t *testing.T) {
 func TestProxy_tcpProxyProtocolV2_RejectsUntrustedProxy(t *testing.T) {
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
-		TCPListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-		UpstreamConfig:            newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
+		TCPListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		UpstreamConfig:            newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
 		TCPProxyProtocolV2Enabled: true,
 		TrustedProxies:            nil,
 	})
 	// New must normalize nil to an empty set (fail-closed), not leave a nil
 	// interface that panics on Contains.
-	require.NotNil(t, dnsProxy.TrustedProxies)
-	require.False(t, dnsProxy.TrustedProxies.Contains(netip.MustParseAddr("127.0.0.1")))
-	require.False(t, dnsProxy.TrustedProxies.Contains(netip.MustParseAddr("1.2.3.4")))
+	require.NotNil(t, dnsProxy.trustedProxies)
+	require.False(t, dnsProxy.trustedProxies.Contains(netip.MustParseAddr("127.0.0.1")))
+	require.False(t, dnsProxy.trustedProxies.Contains(netip.MustParseAddr("1.2.3.4")))
 
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
 
@@ -159,10 +160,10 @@ func TestProxy_tlsProxyProtocolV2_Strict(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
-		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:                 serverConfig,
-		UpstreamConfig:            newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies:            defaultTrustedProxies,
+		UpstreamConfig:            newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies:            dnsproxytest.DefaultTrustedProxies,
 		TLSProxyProtocolV2Enabled: true,
 	})
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
@@ -206,10 +207,10 @@ func TestProxy_tlsProxyProtocolV2_DisabledRejectsHeader(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:         testLogger,
-		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:      serverConfig,
-		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies: defaultTrustedProxies,
+		UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 	})
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
 
@@ -239,10 +240,10 @@ func TestProxy_tlsProxyProtocolV2_SlowConnCanBlockNextConn(t *testing.T) {
 	// public recursive RTT (which previously caused ReadMsg i/o timeout flakes).
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
-		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:                 serverConfig,
 		UpstreamConfig:            newLocalPlainUpstreamConfig(t),
-		TrustedProxies:            defaultTrustedProxies,
+		TrustedProxies:            dnsproxytest.DefaultTrustedProxies,
 		TLSProxyProtocolV2Enabled: true,
 		MaxGoroutines:             1,
 	})
@@ -305,10 +306,10 @@ func TestProxy_tlsProxyProtocolV2_DiscardExtraPayload(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
-		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:                 serverConfig,
-		UpstreamConfig:            newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies:            defaultTrustedProxies,
+		UpstreamConfig:            newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies:            dnsproxytest.DefaultTrustedProxies,
 		TLSProxyProtocolV2Enabled: true,
 	})
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
@@ -365,10 +366,10 @@ func TestProxy_tlsProxyProtocolV2_ProductionLikeConcurrentMix(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:                    testLogger,
-		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:             []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:                 serverConfig,
 		UpstreamConfig:            newLocalPlainUpstreamConfig(t),
-		TrustedProxies:            defaultTrustedProxies,
+		TrustedProxies:            dnsproxytest.DefaultTrustedProxies,
 		TLSProxyProtocolV2Enabled: true,
 		MaxGoroutines:             1,
 	})
@@ -451,7 +452,7 @@ func newLocalPlainUpstreamConfig(tb testing.TB) (uc *UpstreamConfig) {
 		Host:   newLocalUpstreamListener(tb, 0, h).String(),
 	}).String()
 
-	return newTestUpstreamConfig(tb, defaultTimeout, addr)
+	return newTestUpstreamConfigFromAddrs(tb, defaultTimeout, addr)
 }
 
 func startSlowPPv2Peers(t *testing.T, addr string, peers int, holdDuration time.Duration) (conns []net.Conn) {
@@ -542,11 +543,9 @@ func TestParseProxyProtocolV2Addr_UnsupportedFamily(t *testing.T) {
 func TestProxyConsumeProxyProtocolV2_LOCALCommandKeepsRemoteAddr(t *testing.T) {
 	remoteAddr := netip.MustParseAddrPort("127.0.0.1:12345")
 	p := &Proxy{
-		Config: Config{
-			TrustedProxies: netutil.SubnetSetFunc(func(a netip.Addr) bool {
-				return a == remoteAddr.Addr()
-			}),
-		},
+		trustedProxies: netutil.SubnetSetFunc(func(a netip.Addr) bool {
+			return a == remoteAddr.Addr()
+		}),
 	}
 
 	header := makeProxyProtocolV2RawHeader(0x20, 0x00, []byte{0xaa, 0xbb, 0xcc})
@@ -561,11 +560,9 @@ func TestProxyConsumeProxyProtocolV2_LOCALCommandKeepsRemoteAddr(t *testing.T) {
 func TestProxyConsumeProxyProtocolV2_UnsupportedFamilyConsumesPayload(t *testing.T) {
 	remoteAddr := netip.MustParseAddrPort("127.0.0.1:12345")
 	p := &Proxy{
-		Config: Config{
-			TrustedProxies: netutil.SubnetSetFunc(func(a netip.Addr) bool {
-				return a == remoteAddr.Addr()
-			}),
-		},
+		trustedProxies: netutil.SubnetSetFunc(func(a netip.Addr) bool {
+			return a == remoteAddr.Addr()
+		}),
 	}
 
 	header := makeProxyProtocolV2RawHeader(0x21, 0x31, []byte{1, 2, 3, 4, 5})
@@ -761,9 +758,9 @@ func TestSetTCPReadDeadline(t *testing.T) {
 
 	p := mustNew(t, &Config{
 		Logger:         testLogger,
-		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies: defaultTrustedProxies,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 		TLSTimeout:     tlsIdle,
 	})
 
@@ -805,11 +802,11 @@ func TestProxy_TLSTimeout_defaultZero(t *testing.T) {
 
 	p := mustNew(t, &Config{
 		Logger:         testLogger,
-		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-		TrustedProxies: defaultTrustedProxies,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 	})
-	require.Equal(t, DefaultTLSTimeout, p.TLSTimeout)
+	require.Equal(t, DefaultTLSTimeout, p.tlsTimeout)
 }
 
 func TestProxy_TLSTimeout_shortIdleCloses(t *testing.T) {
@@ -824,13 +821,13 @@ func TestProxy_TLSTimeout_shortIdleCloses(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:         testLogger,
-		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:      serverConfig,
 		TLSTimeout:     idle,
 		UpstreamConfig: newLocalPlainUpstreamConfig(t),
-		TrustedProxies: defaultTrustedProxies,
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 	})
-	require.Equal(t, idle, dnsProxy.TLSTimeout)
+	require.Equal(t, idle, dnsProxy.tlsTimeout)
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
 
 	rawConn, err := net.Dial("tcp", dnsProxy.Addr(ProtoTLS).String())
@@ -858,9 +855,9 @@ func TestProxy_MaxTCPConnections_rejectsWhenFull(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:            testLogger,
-		TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		UpstreamConfig:    newLocalPlainUpstreamConfig(t),
-		TrustedProxies:    defaultTrustedProxies,
+		TrustedProxies:    dnsproxytest.DefaultTrustedProxies,
 		MaxTCPConnections: 1,
 	})
 	servicetest.RequireRun(t, dnsProxy, testTimeout)
@@ -915,10 +912,10 @@ func TestProxy_MaxTCPConnections_tlsRejectsWhenFull(t *testing.T) {
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:            testLogger,
-		TLSListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		TLSListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		TLSConfig:         serverConfig,
 		UpstreamConfig:    newLocalPlainUpstreamConfig(t),
-		TrustedProxies:    defaultTrustedProxies,
+		TrustedProxies:    dnsproxytest.DefaultTrustedProxies,
 		MaxTCPConnections: 1,
 	})
 	servicetest.RequireRun(t, dnsProxy, testTimeout)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -214,7 +215,7 @@ func TestUpstreamConfig_Validate(t *testing.T) {
 			require.NoError(t, err)
 			testutil.CleanupAndRequireSuccess(t, c.Close)
 
-			assert.ErrorIs(t, c.validate(), tc.wantErr)
+			assert.ErrorIs(t, c.Validate(), tc.wantErr)
 		})
 	}
 
@@ -223,7 +224,7 @@ func TestUpstreamConfig_Validate(t *testing.T) {
 
 		var c *UpstreamConfig
 
-		assert.Equal(t, c.validate(), errors.ErrNoValue)
+		assert.Equal(t, c.Validate(), errors.ErrNoValue)
 	})
 }
 
@@ -400,7 +401,7 @@ func BenchmarkUpstreamConfig_GetUpstreamsForDomain(b *testing.B) {
 		Logger:             testLogger,
 		InsecureSkipVerify: false,
 		Bootstrap:          nil,
-		Timeout:            testTimeout,
+		Timeout:            dnsproxytest.Timeout,
 	})
 	testutil.CleanupAndRequireSuccess(b, config.Close)
 
@@ -429,7 +430,7 @@ func BenchmarkUpstreamConfig_GetUpstreamsForDomain(b *testing.B) {
 	//
 	//	goos: darwin
 	//	goarch: arm64
-	//	pkg: github.com/AdguardTeam/dnsproxy/proxy
+	//	pkg: github.com/fcchbjm/dnsproxy/proxy
 	//	cpu: Apple M4 Pro
 	//  BenchmarkUpstreamConfig_GetUpstreamsForDomain/get-14    48695488    24.51 ns/op     0 B/op	0 allocs/op
 }

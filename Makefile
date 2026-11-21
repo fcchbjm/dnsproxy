@@ -25,7 +25,7 @@ GOAMD64 = v1
 GOPROXY = https://proxy.golang.org|direct
 GOTELEMETRY = off
 OUT = dnsproxy
-GOTOOLCHAIN = go1.26.5
+GOTOOLCHAIN = go1.27.4
 RACE = 0
 # Passed to go-test.sh; override with make test TEST_RACE=0 (e.g. Windows CI:
 # quic-go HTTP/3 + -race can crash with access violation).

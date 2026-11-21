@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -38,7 +39,7 @@ func TestUpstream_dnsOverTLS(t *testing.T) {
 
 	// Test that it responds properly.
 	for range 10 {
-		checkUpstream(t, u, addr)
+		checkUpstream(t, u, addr, testTimeout)
 	}
 }
 
@@ -69,8 +70,9 @@ func TestUpstream_dnsOverTLS_race(t *testing.T) {
 		wg.Go(func() {
 			pt := testutil.PanicT{}
 
+			ctx := testutil.ContextWithTimeout(t, testTimeout)
 			req := createTestMessage()
-			resp, uErr := u.Exchange(req)
+			resp, uErr := u.Exchange(ctx, req)
 			require.NoError(pt, uErr)
 			requireResponse(pt, req, resp)
 		})
@@ -112,7 +114,8 @@ func TestUpstream_dnsOverTLS_poolReconnect(t *testing.T) {
 
 	// Send the first test message.
 	req := createTestMessage()
-	reply, err := u.Exchange(req)
+	ctx := testutil.ContextWithTimeout(t, testTimeout)
+	reply, err := u.Exchange(ctx, req)
 	require.NoError(t, err)
 	requireResponse(t, req, reply)
 
@@ -123,7 +126,8 @@ func TestUpstream_dnsOverTLS_poolReconnect(t *testing.T) {
 
 	// Send the second test message.
 	req = createTestMessage()
-	reply, err = u.Exchange(req)
+	ctx = testutil.ContextWithTimeout(t, testTimeout)
+	reply, err = u.Exchange(ctx, req)
 	require.NoError(t, err)
 	requireResponse(t, req, reply)
 
@@ -154,7 +158,8 @@ func TestUpstream_dnsOverTLS_poolDeadline(t *testing.T) {
 
 	// Send the first test message.
 	req := createTestMessage()
-	response, err := u.Exchange(req)
+	ctx := testutil.ContextWithTimeout(t, testTimeout)
+	response, err := u.Exchange(ctx, req)
 	require.NoError(t, err)
 	requireResponse(t, req, response)
 
@@ -167,11 +172,12 @@ func TestUpstream_dnsOverTLS_poolDeadline(t *testing.T) {
 	dialHandler, err := p.getDialer()
 	require.NoError(t, err)
 
-	usedConn, err := p.conn(dialHandler)
+	ctx = testutil.ContextWithTimeout(t, testTimeout)
+	usedConn, err := p.conn(ctx, dialHandler)
 	require.NoError(t, err)
 	require.Same(t, usedConn, conn)
 
-	response, err = p.exchangeWithConn(conn, req)
+	response, err = p.exchangeWithConn(ctx, conn, req)
 	require.NoError(t, err)
 	requireResponse(t, req, response)
 
@@ -185,11 +191,12 @@ func TestUpstream_dnsOverTLS_poolDeadline(t *testing.T) {
 	require.Len(t, p.conns, 1)
 	conn = p.conns[0]
 
-	usedConn, err = p.conn(dialHandler)
+	ctx = testutil.ContextWithTimeout(t, testTimeout)
+	usedConn, err = p.conn(ctx, dialHandler)
 	require.NoError(t, err)
 	require.Same(t, usedConn, conn)
 
-	response, err = p.exchangeWithConn(usedConn, req)
+	response, err = p.exchangeWithConn(ctx, usedConn, req)
 	require.NoError(t, err)
 	requireResponse(t, req, response)
 
@@ -197,8 +204,16 @@ func TestUpstream_dnsOverTLS_poolDeadline(t *testing.T) {
 	err = usedConn.SetDeadline(time.Now().Add(-10 * time.Hour))
 	require.NoError(t, err)
 
-	// Connection with expired deadLine can't be used.
-	response, err = p.exchangeWithConn(usedConn, req)
+	// Each exchange refreshes the connection deadline, so an expired one
+	// doesn't make the pooled connection unusable.
+	response, err = p.exchangeWithConn(ctx, usedConn, req)
+	require.NoError(t, err)
+	requireResponse(t, req, response)
+
+	// A connection that is actually unusable must fail the exchange.
+	require.NoError(t, usedConn.Close())
+
+	response, err = p.exchangeWithConn(ctx, usedConn, req)
 	require.Error(t, err)
 	require.Nil(t, response)
 }
@@ -297,7 +312,7 @@ func BenchmarkDoTUpstream(b *testing.B) {
 
 		b.RunParallel(func(p *testing.PB) {
 			for p.Next() {
-				_, _ = u.Exchange(<-reqChan)
+				_, _ = u.Exchange(context.Background(), <-reqChan)
 			}
 		})
 	})

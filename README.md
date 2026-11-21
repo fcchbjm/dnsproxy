@@ -57,7 +57,7 @@ When enabled, strict mode requires PPv2 headers; missing headers are rejected.
   - `--tcp-proxy-protocol-v2`: require PPv2 on DNS-over-TCP listeners.
   - `--tls-proxy-protocol-v2`: require PPv2 on DoT listeners (parsed before TLS handshake).
   - `--proxy-protocol-v2-read-timeout=duration`: timeout for reading PPv2 preface and payload on new TCP/DoT connections (default: `3s`).
-- YAML (`config.yaml.dist`)
+- YAML (`config.dist.yaml`)
   - `tcp-proxy-protocol-v2: true|false`
   - `tls-proxy-protocol-v2: true|false`
   - `proxy-protocol-v2-read-timeout: 3s`
@@ -99,7 +99,7 @@ Standalone `dnsproxy` defaults `TrustedProxies` to an **empty set** (trust nobod
 Configure explicitly for LB / reverse-proxy deployments:
 
 - CLI: `--trusted-proxies=10.0.0.0/8` (repeatable); same-host HAProxy → `127.0.0.0/8` (and `::1/128` if needed) — see the minimal fragment below
-- YAML: `trusted-proxies: ["10.0.0.0/8", ...]` (see `config.yaml.dist`)
+- YAML: `trusted-proxies: ["10.0.0.0/8", ...]` (see `config.dist.yaml`)
 
 Also:
 
@@ -170,7 +170,7 @@ In complex LB + encrypted DNS deployments, this project applies a dedicated conn
 - Config: `--tls-timeout` / YAML `tls-timeout`.
 - Defaults (dual-layer, same pattern as TrustedProxies):
   - **Library / embedders**: `proxy.Config.TLSTimeout` zero → **600s** (`DefaultTLSTimeout`).
-  - **Standalone `dnsproxy`**: explicit default **60s** (`config.yaml.dist` / cmd seed). This is an intentional break from the historical 600s binary default.
+  - **Standalone `dnsproxy`**: explicit default **60s** (`config.dist.yaml` / cmd seed). This is an intentional break from the historical 600s binary default.
 - Behavior:
   - DoT idle window uses read deadline (not full deadline).
   - TLS handshake has explicit deadline to avoid indefinite connection occupancy.
@@ -205,11 +205,11 @@ Standalone defaults `--tls-timeout` / `tls-timeout` to **60s**. Embedders that l
 
 ### Max TCP/DoT connections (opt-in)
 
-`--max-tcp-connections` / `max-tcp-connections` caps concurrently **accepted** plain TCP and DoT connections right after `Accept` (before request handling). **Default 0 = unlimited** (library and standalone). Orthogonal to `--max-go-routines` (in-flight DNS work). Public deployments should set an explicit value (e.g. `512`); see `config.yaml.dist`.
+`--max-tcp-connections` / `max-tcp-connections` caps concurrently **accepted** plain TCP and DoT connections right after `Accept` (before request handling). **Default 0 = unlimited** (library and standalone). Orthogonal to `--max-go-routines` (in-flight DNS work). Public deployments should set an explicit value (e.g. `512`); see `config.dist.yaml`.
 
 ### DoH max concurrent requests (opt-in)
 
-`--doh-max-concurrent` / `doh-max-concurrent` caps in-flight DoH work in `Proxy.ServeHTTP` (HTTP/1.1, HTTP/2, and HTTP/3 share the limit). **Default 0 = unlimited**. At capacity the handler returns **HTTP 429** with `Retry-After: 1`. Orthogonal to `--max-go-routines` and `--max-tcp-connections`. Public deployments should set an explicit value (e.g. `256`); see `config.yaml.dist`. Embedders that only register `ServeHTTP` on their own `http.Server` get the same limit when `HTTPConfig.MaxConcurrentRequests` is set.
+`--doh-max-concurrent` / `doh-max-concurrent` caps in-flight DoH work in `Proxy.ServeHTTP` (HTTP/1.1, HTTP/2, and HTTP/3 share the limit). **Default 0 = unlimited**. At capacity the handler returns **HTTP 429** with `Retry-After: 1`. Orthogonal to `--max-go-routines` and `--max-tcp-connections`. Public deployments should set an explicit value (e.g. `256`); see `config.dist.yaml`. Embedders that only register `ServeHTTP` on their own `http.Server` get the same limit when `HTTPConfig.MaxConcurrentRequests` is set.
 
 ### Optimistic cache vs hosts files
 
@@ -223,7 +223,7 @@ Enabling both `--cache-optimistic` / `cache-optimistic` and `--hosts-file-enable
 
 Embedders that construct `ratelimit.Config` / `NewMiddleware` directly must set **`MaxSize > 0`** (e.g. `ratelimit.DefaultMaxSize`); zero fails validation.
 
-Standalone default `ratelimit-subnet-len-ipv6` is **64** (aligned with `config.yaml.dist`); upgrades that relied on the previous implicit **56** without setting the knob get finer IPv6 rate-limit aggregation—set YAML/CLI explicitly to keep the old behavior.
+Standalone default `ratelimit-subnet-len-ipv6` is **64** (aligned with `config.dist.yaml`); upgrades that relied on the previous implicit **56** without setting the knob get finer IPv6 rate-limit aggregation—set YAML/CLI explicitly to keep the old behavior.
 
 ### `--doh-insecure-enabled` meaning
 
@@ -310,7 +310,7 @@ Usage of ./dnsproxy:
   --cache-size=int
         Cache size (in bytes). Default: 64k.
   --config-path=path
-        YAML configuration file. Minimal working configuration in config.yaml.dist. Options passed through command line will override the ones from this file.
+        YAML configuration file. Minimal working configuration in config.dist.yaml. Options passed through command line will override the ones from this file.
   --dnssec
         Defines whether the proxy should set the DO bits in the upstream requests.  Default: true.
   --doh-insecure-enabled

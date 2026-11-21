@@ -111,7 +111,7 @@ type countingUpstream struct {
 var _ upstream.Upstream = (*countingUpstream)(nil)
 
 // Exchange implements the [upstream.Upstream] interface for *countingUpstream.
-func (u *countingUpstream) Exchange(m *dns.Msg) (resp *dns.Msg, err error) {
+func (u *countingUpstream) Exchange(_ context.Context, m *dns.Msg) (resp *dns.Msg, err error) {
 	u.n.Add(1)
 
 	return (&dns.Msg{}).SetReply(m), nil
@@ -133,7 +133,7 @@ type answeringUpstream struct {
 var _ upstream.Upstream = (*answeringUpstream)(nil)
 
 // Exchange implements the [upstream.Upstream] interface for *answeringUpstream.
-func (u *answeringUpstream) Exchange(m *dns.Msg) (resp *dns.Msg, err error) {
+func (u *answeringUpstream) Exchange(_ context.Context, m *dns.Msg) (resp *dns.Msg, err error) {
 	u.n.Add(1)
 	resp = (&dns.Msg{}).SetReply(m)
 	if len(m.Question) == 1 && m.Question[0].Qtype == dns.TypeA {

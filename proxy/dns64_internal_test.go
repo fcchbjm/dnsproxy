@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"sync"
@@ -18,10 +19,10 @@ import (
 
 const ipv4OnlyFqdn = "ipv4.only."
 
-func TestDNS64Race(t *testing.T) {
-	ans := newRR(t, ipv4OnlyFqdn, dns.TypeA, 3600, net.ParseIP("1.2.3.4"))
-	ups := &dnsproxytest.Upstream{
-		OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
+func TestProxy_HandleDNSRequest_dns64Race(t *testing.T) {
+	ans := newRR(t, ipv4OnlyFqdn, dns.TypeA, 3600, dnsproxytest.IPv4)
+	ups := &testUpstream{
+		OnExchange: func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 			resp = (&dns.Msg{}).SetReply(req)
 			if req.Question[0].Qtype == dns.TypeA {
 				resp.Answer = []dns.RR{dns.Copy(ans)}
@@ -32,16 +33,18 @@ func TestDNS64Race(t *testing.T) {
 		OnAddress: func() (addr string) { return "fake.address" },
 		OnClose:   func() (err error) { return nil },
 	}
-	localUps := &dnsproxytest.Upstream{
-		OnExchange: func(m *dns.Msg) (_ *dns.Msg, _ error) { panic(testutil.UnexpectedCall(m)) },
-		OnAddress:  func() (addr string) { return "fake.address" },
-		OnClose:    func() (err error) { return nil },
+	localUps := &testUpstream{
+		OnExchange: func(ctx context.Context, m *dns.Msg) (_ *dns.Msg, _ error) {
+			panic(testutil.UnexpectedCall(ctx, m))
+		},
+		OnAddress: func() (addr string) { return "fake.address" },
+		OnClose:   func() (err error) { return nil },
 	}
 
 	dnsProxy := mustNew(t, &Config{
 		Logger:         testLogger,
-		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		PrivateSubnets: netutil.SubnetSetFunc(netutil.IsLocallyServed),
 		UpstreamConfig: &UpstreamConfig{
 			Upstreams: []upstream.Upstream{ups},
@@ -49,7 +52,7 @@ func TestDNS64Race(t *testing.T) {
 		PrivateRDNSUpstreamConfig: &UpstreamConfig{
 			Upstreams: []upstream.Upstream{localUps},
 		},
-		TrustedProxies: defaultTrustedProxies,
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 
 		UseDNS64:       true,
 		UsePrivateRDNS: true,
@@ -57,30 +60,42 @@ func TestDNS64Race(t *testing.T) {
 		DNS64Prefs: []netip.Prefix{netip.MustParsePrefix("2001:67c:27e4:1064::/96")},
 	})
 
-	servicetest.RequireRun(t, dnsProxy, testTimeout)
+	servicetest.RequireRun(t, dnsProxy, dnsproxytest.Timeout)
 
 	syncCh := make(chan struct{})
 
 	// Send requests.
 	g := &sync.WaitGroup{}
-	g.Add(testMessagesCount)
+	g.Add(dnsproxytest.MessageCount)
 
 	addr := dnsProxy.Addr(ProtoTCP).String()
-	for range testMessagesCount {
+	for range dnsproxytest.MessageCount {
 		// The [dns.Conn] isn't safe for concurrent use despite the requirements
 		// from the [net.Conn] documentation.
 		conn, err := dns.Dial("tcp", addr)
 		require.NoError(t, err)
+		testutil.CleanupAndRequireSuccess(t, conn.Close)
 
-		go sendTestAAAAMessageAsync(conn, g, ipv4OnlyFqdn, syncCh)
+		go exchangeTestAAAARequestAsync(t, conn, g, ipv4OnlyFqdn, syncCh)
 	}
 
 	close(syncCh)
 	g.Wait()
 }
 
-func sendTestAAAAMessageAsync(conn *dns.Conn, g *sync.WaitGroup, fqdn string, syncCh chan struct{}) {
-	pt := testutil.PanicT{}
+// exchangeTestAAAARequestAsync is a test helper that sends an AAAA DNS request
+// for the given FQDN and verifies the response contains a single AAAA record.
+// It is intended to be used as a goroutine.
+func exchangeTestAAAARequestAsync(
+	tb testing.TB,
+	conn *dns.Conn,
+	g *sync.WaitGroup,
+	fqdn string,
+	syncCh chan struct{},
+) {
+	tb.Helper()
+
+	pt := testutil.NewPanicT(tb)
 
 	defer g.Done()
 
@@ -92,7 +107,7 @@ func sendTestAAAAMessageAsync(conn *dns.Conn, g *sync.WaitGroup, fqdn string, sy
 
 	res, err := conn.ReadMsg()
 	require.NoError(pt, err)
-	require.Equal(pt, res.Rcode, dns.RcodeSuccess)
+	require.Equal(pt, dns.RcodeSuccess, res.Rcode)
 	require.NotEmpty(pt, res.Answer)
 
 	require.IsType(pt, &dns.AAAA{}, res.Answer[0])
@@ -178,10 +193,10 @@ func TestProxy_Resolve_dns64(t *testing.T) {
 	// a given question type.
 	type answerMap = map[uint16][sectionsNum][]dns.RR
 
-	pt := testutil.PanicT{}
+	pt := testutil.NewPanicT(t)
 	newUps := func(answers answerMap) (u upstream.Upstream) {
-		return &dnsproxytest.Upstream{
-			OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
+		return &testUpstream{
+			OnExchange: func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 				q := req.Question[0]
 				require.Contains(pt, answers, q.Qtype)
 
@@ -200,8 +215,8 @@ func TestProxy_Resolve_dns64(t *testing.T) {
 	}
 
 	localRR := newRR(t, ptr64Domain, dns.TypePTR, 3600, domainPointed)
-	localUps := &dnsproxytest.Upstream{
-		OnExchange: func(req *dns.Msg) (resp *dns.Msg, err error) {
+	localUps := &testUpstream{
+		OnExchange: func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 			require.Equal(pt, req.Question[0].Name, ptr64Domain)
 			resp = (&dns.Msg{}).SetReply(req)
 			resp.Answer = []dns.RR{localRR}
@@ -394,17 +409,20 @@ func TestProxy_Resolve_dns64(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			udpAddr := net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)
+			tcpAddr := net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)
+
 			p := mustNew(t, &Config{
 				Logger:        testLogger,
-				UDPListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-				TCPListenAddr: []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+				UDPListenAddr: []*net.UDPAddr{udpAddr},
+				TCPListenAddr: []*net.TCPAddr{tcpAddr},
 				UpstreamConfig: &UpstreamConfig{
 					Upstreams: []upstream.Upstream{newUps(tc.upsAns)},
 				},
 				PrivateRDNSUpstreamConfig: &UpstreamConfig{
 					Upstreams: []upstream.Upstream{localUps},
 				},
-				TrustedProxies: defaultTrustedProxies,
+				TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 				CacheEnabled:   true,
 
 				UseDNS64:       true,
@@ -412,7 +430,7 @@ func TestProxy_Resolve_dns64(t *testing.T) {
 				PrivateSubnets: netutil.SubnetSetFunc(netutil.IsLocallyServed),
 			})
 
-			servicetest.RequireRun(t, p, testTimeout)
+			servicetest.RequireRun(t, p, dnsproxytest.Timeout)
 
 			dctx := &DNSContext{
 				Req:  (&dns.Msg{}).SetQuestion(tc.qname, tc.qtype),

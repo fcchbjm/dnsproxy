@@ -9,6 +9,7 @@ import (
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/fcchbjm/dnsproxy/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/proxy"
 	"github.com/fcchbjm/dnsproxy/ratelimit"
 	"github.com/stretchr/testify/assert"
@@ -72,7 +73,7 @@ func TestMiddleware_Wrap(t *testing.T) {
 
 	for _, tc := range testCases {
 		called := 0
-		mock := &TestHandler{
+		mock := &dnsproxytest.Handler{
 			OnHandle: func(_ context.Context, p *proxy.Proxy, dctx *proxy.DNSContext) (err error) {
 				called++
 
@@ -120,7 +121,7 @@ func TestMiddleware_Wrap_allowlist(t *testing.T) {
 	}
 
 	called := 0
-	mock := &TestHandler{
+	mock := &dnsproxytest.Handler{
 		OnHandle: func(_ context.Context, p *proxy.Proxy, dctx *proxy.DNSContext) (err error) {
 			called++
 
@@ -164,23 +165,4 @@ func TestMiddleware_Wrap_allowlist(t *testing.T) {
 
 		assert.Equal(t, 3, called)
 	})
-}
-
-// TestHandler is a mock request middleware implementation to simplify testing.
-//
-// TODO(d.kolyshev):  Move to internal/dnsproxytest.
-type TestHandler struct {
-	OnHandle func(ctx context.Context, p *proxy.Proxy, dctx *proxy.DNSContext) (err error)
-}
-
-// type check
-var _ proxy.Handler = (*TestHandler)(nil)
-
-// ServeDNS implements the [Handler] interface for *TestHandler.
-func (h *TestHandler) ServeDNS(
-	ctx context.Context,
-	p *proxy.Proxy,
-	dctx *proxy.DNSContext,
-) (err error) {
-	return h.OnHandle(ctx, p, dctx)
 }

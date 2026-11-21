@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,9 +33,9 @@ func TestProxy_unlimitedCaps_warnOnListen(t *testing.T) {
 		logBuf := &bytes.Buffer{}
 		p := mustNew(t, &Config{
 			Logger:            newCapturingLogger(logBuf),
-			TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-			UpstreamConfig:    newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-			TrustedProxies:    defaultTrustedProxies,
+			TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+			UpstreamConfig:    newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+			TrustedProxies:    dnsproxytest.DefaultTrustedProxies,
 			MaxTCPConnections: 0,
 		})
 		require.Nil(t, p.tcpConnsSema)
@@ -48,9 +49,9 @@ func TestProxy_unlimitedCaps_warnOnListen(t *testing.T) {
 		logBuf := &bytes.Buffer{}
 		p := mustNew(t, &Config{
 			Logger:            newCapturingLogger(logBuf),
-			TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-			UpstreamConfig:    newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-			TrustedProxies:    defaultTrustedProxies,
+			TCPListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+			UpstreamConfig:    newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+			TrustedProxies:    dnsproxytest.DefaultTrustedProxies,
 			MaxTCPConnections: 32,
 		})
 		require.NotNil(t, p.tcpConnsSema)
@@ -65,9 +66,9 @@ func TestProxy_unlimitedCaps_warnOnListen(t *testing.T) {
 		logBuf := &bytes.Buffer{}
 		_ = mustNew(t, &Config{
 			Logger:            newCapturingLogger(logBuf),
-			UDPListenAddr:     []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-			UpstreamConfig:    newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-			TrustedProxies:    defaultTrustedProxies,
+			UDPListenAddr:     []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+			UpstreamConfig:    newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+			TrustedProxies:    dnsproxytest.DefaultTrustedProxies,
 			MaxTCPConnections: 0,
 		})
 		assert.NotContains(t, logBuf.String(), warnMaxTCPUnlimited)
@@ -82,11 +83,11 @@ func TestProxy_unlimitedCaps_warnOnListen(t *testing.T) {
 		p := mustNew(t, &Config{
 			Logger:         newCapturingLogger(logBuf),
 			TLSConfig:      tlsConf,
-			TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-			UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-			TrustedProxies: defaultTrustedProxies,
+			TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+			UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+			TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 			HTTPConfig: &HTTPConfig{
-				ListenAddresses:       []netip.AddrPort{localhostAnyPort},
+				ListenAddresses:       []netip.AddrPort{dnsproxytest.LocalhostAnyPort},
 				MaxConcurrentRequests: 0,
 			},
 		})
@@ -105,12 +106,12 @@ func TestProxy_unlimitedCaps_warnOnListen(t *testing.T) {
 		p := mustNew(t, &Config{
 			Logger:            newCapturingLogger(logBuf),
 			TLSConfig:         tlsConf,
-			TLSListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
-			UpstreamConfig:    newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-			TrustedProxies:    defaultTrustedProxies,
+			TLSListenAddr:     []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+			UpstreamConfig:    newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+			TrustedProxies:    dnsproxytest.DefaultTrustedProxies,
 			MaxTCPConnections: 64,
 			HTTPConfig: &HTTPConfig{
-				ListenAddresses:       []netip.AddrPort{localhostAnyPort},
+				ListenAddresses:       []netip.AddrPort{dnsproxytest.LocalhostAnyPort},
 				MaxConcurrentRequests: 16,
 			},
 		})
@@ -130,9 +131,9 @@ func TestProxy_unlimitedCaps_warnOnListen(t *testing.T) {
 		logBuf := &bytes.Buffer{}
 		_ = mustNew(t, &Config{
 			Logger:         newCapturingLogger(logBuf),
-			UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-			UpstreamConfig: newTestUpstreamConfig(t, defaultTimeout, testDefaultUpstreamAddr),
-			TrustedProxies: defaultTrustedProxies,
+			UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+			UpstreamConfig: newTestUpstreamConfigFromAddrs(t, defaultTimeout, testDefaultUpstreamAddr),
+			TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 			HTTPConfig: &HTTPConfig{
 				MaxConcurrentRequests: 0,
 			},

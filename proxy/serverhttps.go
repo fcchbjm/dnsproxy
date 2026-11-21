@@ -24,8 +24,8 @@ import (
 )
 
 // listenHTTP creates instances of TLS listeners that will be used to run an
-// H1/H2 server.  Returns the address the listener actually listens to (useful
-// in the case if port 0 is specified).
+// HTTP/1.1 and HTTP/2 servers.  It returns the address the listener actually
+// listens to.  addr must not be nil.
 func (p *Proxy) listenHTTP(
 	ctx context.Context,
 	addr *net.TCPAddr,
@@ -34,6 +34,7 @@ func (p *Proxy) listenHTTP(
 	err = p.bindWithRetry(ctx, func() (listenErr error) {
 		tcpListen, listenErr = net.ListenTCP(bootstrap.NetworkTCP, addr)
 
+		// Don't wrap the error since it's informative enough as is.
 		return listenErr
 	})
 	if err != nil {
@@ -48,7 +49,7 @@ func (p *Proxy) listenHTTP(
 
 	p.logger.InfoContext(ctx, "listening to https", "addr", tcpAddr)
 
-	tlsConfig := p.TLSConfig.Clone()
+	tlsConfig := p.tlsConf.Clone()
 	tlsConfig.NextProtos = []string{http2.NextProtoTLS, "http/1.1"}
 
 	tlsListen := tls.NewListener(tcpListen, tlsConfig)
@@ -57,12 +58,12 @@ func (p *Proxy) listenHTTP(
 }
 
 // listenH3 creates instances of QUIC listeners that will be used for running
-// an HTTP/3 server.
+// an HTTP/3 server.  addr must not be nil.
 func (p *Proxy) listenH3(
 	ctx context.Context,
 	addr *net.UDPAddr,
 ) (ln *quic.EarlyListener, err error) {
-	tlsConfig := p.TLSConfig.Clone()
+	tlsConfig := p.tlsConf.Clone()
 	tlsConfig.NextProtos = []string{"h3"}
 	quicListen, err := quic.ListenAddrEarly(addr.String(), tlsConfig, newServerDoH3Config())
 	if err != nil {
@@ -97,7 +98,7 @@ func newServerDoH3Config() (conf *quic.Config) {
 
 // initHTTPSListeners creates TCP/UDP listeners and HTTP/H3 servers.
 func (p *Proxy) initHTTPSListeners(ctx context.Context) (err error) {
-	httpConf := p.HTTPConfig
+	httpConf := p.httpConf
 	if httpConf == nil {
 		p.logger.DebugContext(ctx, "no https configuration provided")
 
@@ -150,7 +151,7 @@ func (p *Proxy) initHTTPSListeners(ctx context.Context) (err error) {
 
 // newDoHReq returns new DNS request parsed from the given HTTP request.  In
 // case of invalid request returns nil and the suitable status code for an HTTP
-// error response.  l must not be nil.
+// error response.  r and l must not be nil.
 func newDoHReq(
 	ctx context.Context,
 	r *http.Request,
@@ -206,7 +207,7 @@ func newDoHReq(
 	return req, http.StatusOK
 }
 
-// ServeHTTP is the http.Handler implementation that handles DoH queries.
+// ServeHTTP is the [http.Handler] implementation that handles DoH queries.
 //
 // Processing order after constructing the request context:
 //
@@ -214,7 +215,7 @@ func newDoHReq(
 //  2. Acquire the DoH concurrency slot (429 + Retry-After: 1 if full).
 //  3. remoteAddr / BasicAuth / newDoHReq / TrustedProxies / handleDNSRequest.
 //
-// Here is what it returns:
+// It returns:
 //
 //   - http.StatusNotFound if the request is not encrypted and proxy is not
 //     configured to accept unencrypted requests,
@@ -232,7 +233,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	p.logger.DebugContext(ctx, "incoming https request", "url", r.URL)
 
-	if !p.HTTPConfig.InsecureEnabled && r.TLS == nil {
+	if !p.httpConf.InsecureEnabled && r.TLS == nil {
 		statusCode := http.StatusNotFound
 		http.Error(w, http.StatusText(statusCode), statusCode)
 
@@ -268,7 +269,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		l.DebugContext(ctx, "request came from proxy server")
 
-		if !p.TrustedProxies.Contains(prx.Addr()) {
+		if !p.trustedProxies.Contains(prx.Addr()) {
 			l.DebugContext(ctx, "proxy is not trusted, using original remote addr")
 
 			// So the address of the proxy itself is used, as the remote address
@@ -291,13 +292,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // checkBasicAuth checks the basic authorization data, if necessary, and if the
 // data isn't valid, it writes an error.  shouldHandle is false if the request
-// has been denied.  p.HTTPConfig must not be nil.
+// has been denied.  w, r and p.httpConf must not be nil.
 func (p *Proxy) checkBasicAuth(
 	w http.ResponseWriter,
 	r *http.Request,
 	raddr netip.AddrPort,
 ) (shouldHandle bool) {
-	ui := p.HTTPConfig.Userinfo
+	ui := p.httpConf.Userinfo
 	if ui == nil {
 		return true
 	}
@@ -343,7 +344,7 @@ func (p *Proxy) respondHTTPS(d *DNSContext) (err error) {
 		return fmt.Errorf("packing message: %w", err)
 	}
 
-	if srvHeader := p.HTTPConfig.ServerHeader; srvHeader != "" {
+	if srvHeader := p.httpConf.ServerHeader; srvHeader != "" {
 		w.Header().Set(httphdr.Server, srvHeader)
 	}
 
@@ -355,7 +356,8 @@ func (p *Proxy) respondHTTPS(d *DNSContext) (err error) {
 
 // realIPFromHdrs extracts the actual client's IP address from the first
 // suitable r's header.  It returns an error if r doesn't contain any
-// information about real client's IP address.  Current headers priority is:
+// information about real client's IP address.  r must not be nil.  Current
+// headers priority is:
 //
 //  1. [httphdr.CFConnectingIP]
 //  2. [httphdr.TrueClientIP]
@@ -383,7 +385,7 @@ func realIPFromHdrs(r *http.Request) (realIP netip.Addr, err error) {
 }
 
 // remoteAddr returns the real client's address and the IP address of the latest
-// proxy server if any.
+// proxy server if any.  r and l must not be nil.
 func remoteAddr(r *http.Request, l *slog.Logger) (addr, prx netip.AddrPort, err error) {
 	host, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {

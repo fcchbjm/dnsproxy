@@ -1,11 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"slices"
 )
 
-// cacheForContext returns cache object for the given context.
+// cacheForContext returns cache object for the given context.  d must not be nil.
 func (p *Proxy) cacheForContext(d *DNSContext) (c *cache) {
 	if d.CustomUpstreamConfig != nil && d.CustomUpstreamConfig.cache != nil {
 		return d.CustomUpstreamConfig.cache
@@ -15,8 +16,9 @@ func (p *Proxy) cacheForContext(d *DNSContext) (c *cache) {
 }
 
 // replyFromCache tries to get the response from general or subnet cache.  In
-// case the cache is present in d, it's used first.  Returns true on success.
-func (p *Proxy) replyFromCache(d *DNSContext) (hit bool) {
+// case the cache is present in d, it's used first.  Returns true on success.  d
+// must not be nil.
+func (p *Proxy) replyFromCache(ctx context.Context, d *DNSContext) (hit bool) {
 	dctxCache := p.cacheForContext(d)
 
 	var ci *cacheItem
@@ -25,7 +27,7 @@ func (p *Proxy) replyFromCache(d *DNSContext) (hit bool) {
 	var key []byte
 
 	// TODO(d.kolyshev): Use EnableEDNSClientSubnet from dctxCache.
-	if p.Config.EnableEDNSClientSubnet && d.ReqECS != nil {
+	if p.enableEDNSClientSubnet && d.ReqECS != nil {
 		ci, expired, key = dctxCache.getWithSubnet(d.Req, d.ReqECS)
 		cacheSource = "subnet cache"
 	} else {
@@ -40,10 +42,11 @@ func (p *Proxy) replyFromCache(d *DNSContext) (hit bool) {
 	d.Res = ci.m
 	d.queryStatistics = cachedQueryStatistics(ci.u)
 
-	p.logger.Debug(
+	p.logger.DebugContext(
+		ctx,
 		"replying from cache",
 		"source", cacheSource,
-		"ecs_enabled", p.Config.EnableEDNSClientSubnet,
+		"ecs_enabled", p.enableEDNSClientSubnet,
 	)
 
 	if dctxCache.optimistic && expired {
@@ -58,7 +61,7 @@ func (p *Proxy) replyFromCache(d *DNSContext) (hit bool) {
 			minCtxClone.Req = d.Req.Copy()
 		}
 
-		go p.shortFlighter.resolveOnce(minCtxClone, key, p.logger)
+		go p.shortFlighter.resolveOnce(ctx, minCtxClone, key, p.logger)
 	}
 
 	return hit
@@ -77,11 +80,11 @@ func cloneIPNet(n *net.IPNet) (clone *net.IPNet) {
 }
 
 // cacheResp stores the response from d in general or subnet cache.  In case the
-// cache is present in d, it's used first.
+// cache is present in d, it's used first.  d must not be nil.
 func (p *Proxy) cacheResp(d *DNSContext) {
 	dctxCache := p.cacheForContext(d)
 
-	if !p.EnableEDNSClientSubnet {
+	if !p.enableEDNSClientSubnet {
 		dctxCache.set(d.Req, d.Res, d.Upstream, p.logger)
 
 		return

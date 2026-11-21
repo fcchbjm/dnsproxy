@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -40,24 +41,24 @@ const (
 // synthesize AAAA records.
 //
 // TODO(e.burkov):  Split validation and initialization.
-func (p *Proxy) setupDNS64() (err error) {
-	if !p.Config.UseDNS64 {
+func (p *Proxy) setupDNS64(dns64Prefs netutil.SliceSubnetSet) (err error) {
+	if !p.useDNS64 {
 		return nil
 	}
 
-	if len(p.Config.DNS64Prefs) == 0 {
+	if len(dns64Prefs) == 0 {
 		p.dns64Prefs = netutil.SliceSubnetSet{dns64WellKnownPref}
 
 		return nil
 	}
 
-	for i, pref := range p.Config.DNS64Prefs {
+	for i, pref := range dns64Prefs {
 		if !pref.Addr().Is6() {
-			return fmt.Errorf("prefix at index %d: %q is not an IPv6 prefix", i, pref)
+			return fmt.Errorf("prefix at index %d: %q is not an ipv6 prefix", i, pref)
 		}
 
 		if pref.Bits() > maxNAT64PrefixBitLen {
-			return fmt.Errorf("prefix at index %d: %q is too long for DNS64", i, pref)
+			return fmt.Errorf("prefix at index %d: %q is too long for dns64", i, pref)
 		}
 
 		p.dns64Prefs = append(p.dns64Prefs, pref.Masked())
@@ -275,8 +276,10 @@ func (p *Proxy) synthRR(rr dns.RR, soaTTL uint32) (result dns.RR) {
 }
 
 // performDNS64 returns the upstream that was used to perform DNS64 request, or
-// nil, if the request was not performed.
+// nil, if the request was not performed.  If origResp is not nil, origReq must
+// also not be nil.
 func (p *Proxy) performDNS64(
+	ctx context.Context,
 	origReq *dns.Msg,
 	origResp *dns.Msg,
 	upstreams []upstream.Upstream,
@@ -291,17 +294,17 @@ func (p *Proxy) performDNS64(
 	}
 
 	host := origReq.Question[0].Name
-	p.logger.Debug("received an empty aaaa response, checking dns64", "host", host)
+	p.logger.DebugContext(ctx, "received an empty aaaa response, checking dns64", "host", host)
 
-	dns64Resp, u, err := p.exchangeUpstreams(dns64Req, upstreams)
+	dns64Resp, u, err := p.exchangeUpstreams(ctx, dns64Req, upstreams)
 	if err != nil {
-		p.logger.Error("dns64 request failed", slogutil.KeyError, err)
+		p.logger.ErrorContext(ctx, "dns64 request failed", slogutil.KeyError, err)
 
 		return nil
 	}
 
 	if dns64Resp != nil && p.synthDNS64(origReq, origResp, dns64Resp) {
-		p.logger.Debug("synthesized aaaa response", "host", host)
+		p.logger.DebugContext(ctx, "synthesized aaaa response", "host", host)
 
 		return u
 	}

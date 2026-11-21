@@ -36,25 +36,27 @@ var compatProtoDQ = []string{NextProtoDQ, "doq-i02", "doq-i00", "dq"}
 const maxQUICIdleTimeout = 30 * time.Second
 
 // quicAddrValidatorCacheSize is the size of the cache that we use in the QUIC
-// address validator.  The value is chosen arbitrarily and we should consider
-// making it configurable.
-// TODO(ameshkov): make it configurable.
+// address validator.
+//
+// TODO(a.garipov): Consider making it configurable.
 const quicAddrValidatorCacheSize = 1000
 
 // quicAddrValidatorCacheTTL is time-to-live for cache items in the QUIC address
-// validator.  The value is chosen arbitrarily and we should consider making it
-// configurable.
-// TODO(ameshkov): make it configurable.
+// validator.
+//
+// TODO(a.garipov): Consider making it configurable.
 const quicAddrValidatorCacheTTL = 30 * time.Minute
 
 const (
 	// DoQCodeNoError is used when the connection or stream needs to be closed,
 	// but there is no error to signal.
 	DoQCodeNoError quic.ApplicationErrorCode = 0
+
 	// DoQCodeInternalError signals that the DoQ implementation encountered
 	// an internal error and is incapable of pursuing the transaction or the
 	// connection.
 	DoQCodeInternalError quic.ApplicationErrorCode = 1
+
 	// DoQCodeProtocolError signals that the DoQ implementation encountered
 	// a protocol error and is forcibly aborting the connection.
 	DoQCodeProtocolError quic.ApplicationErrorCode = 2
@@ -62,10 +64,13 @@ const (
 
 // initQUICListeners creates QUIC listeners for the DoQ server.
 func (p *Proxy) initQUICListeners(ctx context.Context) (err error) {
-	for _, a := range p.QUICListenAddr {
-		var conn *net.UDPConn
-		var ln *quic.EarlyListener
-		var tr *quic.Transport
+	for _, a := range p.quicListenAddr {
+		var (
+			conn *net.UDPConn
+			ln   *quic.EarlyListener
+			tr   *quic.Transport
+		)
+
 		conn, ln, tr, err = p.listenQUIC(ctx, a)
 		if err != nil {
 			return fmt.Errorf("listening on quic addr %s: %w", a, err)
@@ -90,6 +95,7 @@ func (p *Proxy) listenQUIC(
 	err = p.bindWithRetry(ctx, func() (listenErr error) {
 		conn, listenErr = net.ListenUDP(bootstrap.NetworkUDP, addr)
 
+		// Don't wrap the error since it's informative enough as is.
 		return listenErr
 	})
 	if err != nil {
@@ -102,7 +108,7 @@ func (p *Proxy) listenQUIC(
 		VerifySourceAddress: v.requiresValidation,
 	}
 
-	tlsConfig := p.TLSConfig.Clone()
+	tlsConfig := p.tlsConf.Clone()
 	tlsConfig.NextProtos = compatProtoDQ
 	l, err = tr.ListenEarly(
 		tlsConfig,
@@ -120,7 +126,7 @@ func (p *Proxy) listenQUIC(
 // quicPacketLoop listens for incoming QUIC packets.  This method is supposed to
 // be run in a separate goroutine.  l and reqSema must not be nil.
 //
-// See also the comment on Proxy.requestsSema.
+// See also the comment on [Proxy.requestsSema].
 func (p *Proxy) quicPacketLoop(
 	ctx context.Context,
 	l *quic.EarlyListener,
@@ -174,9 +180,8 @@ func (p *Proxy) acceptQUICConn(
 }
 
 // isNonCriticalNetError is a helper that returns true if err is a
-// [context.ErrDeadlineExceeded], or [net.Error] with its Timeout method
-// returning true.  This is used to filter out non-critical errors in accept
-// loops.
+// [context.DeadlineExceeded], or [net.Error] with [net.Error.Timeout] returning
+// true.  This is used to filter out non-critical errors in accept loops.
 func isNonCriticalNetError(err error) (ok bool) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -190,7 +195,8 @@ func isNonCriticalNetError(err error) (ok bool) {
 	return false
 }
 
-// logQUICError writes suitable log message for the given err.
+// logQUICError writes suitable log message for the given err.  l must not be
+// nil.
 func logQUICError(ctx context.Context, prefix string, err error, l *slog.Logger) {
 	if isQUICErrorForDebugLog(err) {
 		l.DebugContext(
@@ -205,9 +211,9 @@ func logQUICError(ctx context.Context, prefix string, err error, l *slog.Logger)
 }
 
 // handleQUICConnection handles a new QUIC connection.  It waits for new streams
-// and passes them to handleQUICStream.
+// and passes them to handleQUICStream.  conn and reqSema must not be nil.
 //
-// See also the comment on Proxy.requestsSema.
+// See also the comment on [Proxy.requestsSema].
 func (p *Proxy) handleQUICConnection(
 	ctx context.Context,
 	conn *quic.Conn,
@@ -252,7 +258,7 @@ func (p *Proxy) handleQUICConnection(
 }
 
 // logQUICStreamError writes suitable log message for the given err.  Skips
-// [context.ErrDeadlineExceeded] and timeout errors.  l must not be nil.
+// [context.DeadlineExceeded] and timeout errors.  l must not be nil.
 func logQUICStreamError(ctx context.Context, prefix string, err error, l *slog.Logger) {
 	if isNonCriticalNetError(err) {
 		return
@@ -306,8 +312,8 @@ func (p *Proxy) acceptStream(
 	return stream, nil
 }
 
-// handleQUICStream reads DNS queries from the stream, processes them,
-// and writes back the response.
+// handleQUICStream reads DNS queries from the stream, processes them, and
+// writes back the response.  stream and conn must not be nil.
 func (p *Proxy) handleQUICStream(ctx context.Context, stream *quic.Stream, conn *quic.Conn) {
 	bufPtr := p.bytesPool.Get()
 	defer p.bytesPool.Put(bufPtr)
@@ -358,7 +364,7 @@ func (p *Proxy) handleQUICStream(ctx context.Context, stream *quic.Stream, conn 
 		return
 	}
 
-	if !validQUICMsg(req, p.logger) {
+	if !validQUICMsg(ctx, conn, req, p.logger) {
 		// If a peer encounters such an error condition, it is considered a
 		// fatal error. It SHOULD forcibly abort the connection using QUIC's
 		// CONNECTION_CLOSE mechanism and SHOULD use the DoQ error code
@@ -397,7 +403,7 @@ func (p *Proxy) respondQUIC(d *DNSContext) error {
 
 	bytes, err := resp.Pack()
 	if err != nil {
-		return fmt.Errorf("couldn't convert message into wire format: %w", err)
+		return fmt.Errorf("converting message to wire format: %w", err)
 	}
 
 	// Depending on the DoQ version with either write a 2-bytes prefixed message
@@ -414,64 +420,111 @@ func (p *Proxy) respondQUIC(d *DNSContext) error {
 
 	n, err := d.QUICStream.Write(buf)
 	if err != nil {
-		return fmt.Errorf("conn.Write(): %w", err)
+		return fmt.Errorf("writing data to stream: %w", err)
 	}
+
 	if n != len(buf) {
-		return fmt.Errorf("conn.Write() returned with %d != %d", n, len(buf))
+		return fmt.Errorf("wrote %d bytes to stream, want %d", n, len(buf))
 	}
 
 	return nil
 }
 
 // validQUICMsg validates the incoming DNS message and returns false if
-// something is wrong with the message.
-func validQUICMsg(req *dns.Msg, l *slog.Logger) (ok bool) {
+// something is wrong with the message.  conn, req, and l must not be nil.
+func validQUICMsg(ctx context.Context, conn *quic.Conn, req *dns.Msg, l *slog.Logger) (ok bool) {
 	// See https://www.rfc-editor.org/rfc/rfc9250.html#name-protocol-errors
 
-	// 1. a client or server receives a message with a non-zero Message ID.
+	// 1. Client or server receives a message with a non-zero Message ID.
 	//
 	// We do consciously not validate this case since there are stub proxies
 	// that are sending a non-zero Message IDs.
-
-	// 2. a client or server receives a STREAM FIN before receiving all the
-	// bytes for a message indicated in the 2-octet length field.
-	// 3. a server receives more than one query on a stream
+	//
+	// 2. Client or server receives a STREAM FIN before receiving all the bytes
+	// for a message indicated in the 2-octet length field.
+	//
+	// 3. Server receives more than one query on a stream.
 	//
 	// These cases are covered earlier when unpacking the DNS message.
-
-	// 4. the client or server does not indicate the expected STREAM FIN after
+	//
+	// 4. Client or server does not indicate the expected STREAM FIN after
 	// sending requests or responses (see Section 4.2).
 	//
-	// This is quite problematic to validate this case since this would imply
-	// we have to wait until STREAM FIN is arrived before we start processing
-	// the message. So we're consciously ignoring this case in this
-	// implementation.
-
-	// 5. an implementation receives a message containing the edns-tcp-keepalive
+	// This is quite problematic to validate this case since this would imply we
+	// have to wait until STREAM FIN is arrived before we start processing the
+	// message.  So we're consciously ignoring this case in this implementation.
+	//
+	// 5. Implementation receives a message containing the edns-tcp-keepalive
 	// EDNS(0) Option [RFC7828] (see Section 5.5.2).
 	if opt := req.IsEdns0(); opt != nil {
 		for _, option := range opt.Option {
 			// Check for EDNS TCP keepalive option
 			if option.Option() == dns.EDNS0TCPKEEPALIVE {
-				l.Debug("client sent edns0 tcp keepalive option")
+				l.DebugContext(ctx, "client sent edns0 tcp keepalive option")
 
 				return false
 			}
 		}
 	}
 
-	// 6. a client or a server attempts to open a unidirectional QUIC stream.
+	// 6. Client or a server attempts to open a unidirectional QUIC stream.
 	//
 	// This case can only be handled when writing a response.
-
-	// 7. a server receives a "replayable" transaction in 0-RTT data
 	//
-	// The information necessary to validate this is not exposed by quic-go.
+	// 7. Server receives a "replayable" transaction in 0-RTT data.
+	//
+	// Per RFC 9250 Section 4.5, only QUERY and NOTIFY transactions may be
+	// processed from 0-RTT early data.  Any other transaction received as early
+	// data is treated as a protocol error and aborts the connection.
+	if isNonReplayableEarlyData(conn, req) {
+		l.DebugContext(
+			ctx,
+			"client sent non-replayable transaction as 0-rtt data",
+			"opcode", req.Opcode,
+		)
+
+		return false
+	}
 
 	return true
 }
 
-// logShortQUICRead is a logging helper for short reads from a QUIC stream.
+// isNonReplayableEarlyData returns true if req was received as QUIC 0-RTT early
+// data and its opcode is not safe to process before the handshake completes.
+// Per RFC 9250 Section 4.5, only QUERY and NOTIFY transactions may be processed
+// from 0-RTT data.  conn and req must not be nil.
+//
+// See https://www.rfc-editor.org/rfc/rfc9250#section-4.5.
+func isNonReplayableEarlyData(conn *quic.Conn, req *dns.Msg) (ok bool) {
+	if isReplayableOpcode(req.Opcode) {
+		return false
+	}
+
+	if !conn.ConnectionState().Used0RTT {
+		return false
+	}
+
+	// The data is early data only if it arrived before the handshake completed
+	// on a resumed 0-RTT connection.
+	select {
+	case <-conn.HandshakeComplete():
+		return false
+	default:
+		return true
+	}
+}
+
+// isReplayableOpcode returns true if a transaction with the given DNS opcode is
+// safe to process from QUIC 0-RTT early data.  Per RFC 9250 Section 4.5, only
+// QUERY and NOTIFY transactions are considered replayable.
+//
+// See https://www.rfc-editor.org/rfc/rfc9250#section-4.5.
+func isReplayableOpcode(opcode int) (ok bool) {
+	return opcode == dns.OpcodeQuery || opcode == dns.OpcodeNotify
+}
+
+// logShortQUICRead is a logging helper for short reads from a QUIC stream.  l
+// must not be nil.
 func logShortQUICRead(ctx context.Context, err error, l *slog.Logger) {
 	if err == nil {
 		l.InfoContext(ctx, "quic packet too short for dns query")
@@ -493,12 +546,12 @@ const (
 )
 
 // isQUICErrorForDebugLog returns true if err is a non-critical error, most
-// probably related to the current QUIC implementation. err must not be nil.
+// probably related to the current QUIC implementation.  err must not be nil.
 //
 // TODO(ameshkov): re-test when updating quic-go.
 func isQUICErrorForDebugLog(err error) (ok bool) {
 	if errors.Is(err, quic.ErrServerClosed) {
-		// This error is returned when the QUIC listener was closed by us. This
+		// This error is returned when the QUIC listener was closed by us.  This
 		// is an expected error, we don't need the detailed logs here.
 		return true
 	}
@@ -532,7 +585,8 @@ func isQUICErrorForDebugLog(err error) (ok bool) {
 	return errors.As(err, &qIdleErr)
 }
 
-// closeQUICConn quietly closes the QUIC connection.
+// closeQUICConn quietly closes the QUIC connection.  conn and l must not be
+// nil.
 func closeQUICConn(conn *quic.Conn, code quic.ApplicationErrorCode, l *slog.Logger) {
 	l.Debug("closing quic conn", "addr", conn.LocalAddr(), "code", code)
 
@@ -580,8 +634,7 @@ func newQUICAddrValidator(cacheSize int, ttl time.Duration) (v *quicAddrValidato
 // client. This allows the server to verify the client's address but increases
 // the latency.
 func (v *quicAddrValidator) requiresValidation(addr net.Addr) (ok bool) {
-	// addr must be *net.UDPAddr here and if it's not we don't mind panic.
-	key := addr.(*net.UDPAddr).IP.String()
+	key := netutil.NetAddrToAddrPort(addr).Addr().String()
 	if v.cache.Has(key) {
 		return false
 	}
@@ -597,13 +650,13 @@ func (v *quicAddrValidator) requiresValidation(addr net.Addr) (ok bool) {
 	return true
 }
 
-// readAll reads from r until an error or io.EOF into the specified buffer buf.
-// A successful call returns err == nil, not err == io.EOF.  If the buffer is
-// too small, it returns error io.ErrShortBuffer.  This function has some
-// similarities to io.ReadAll, but it reads to the specified buffer and not
-// allocates (and grows) a new one.  Also, it is completely different from
-// io.ReadFull as that one reads the exact number of bytes (buffer length) and
-// readAll reads until io.EOF or until the buffer is filled.
+// readAll reads from r until an error or [io.EOF] into the specified buffer
+// buf. A successful call returns nil err, not [io.EOF].  If the buffer is too
+// small, it returns [io.ErrShortBuffer].  This function has some similarities
+// to [io.ReadAll], but it reads to the specified buffer and not allocates (and
+// grows) a new one.  Also, it is completely different from [io.ReadFull] as
+// that one reads the exact number of bytes and readAll reads until [io.EOF] or
+// until the buffer is filled.
 func readAll(r io.Reader, buf []byte) (n int, err error) {
 	for {
 		if n == len(buf) {

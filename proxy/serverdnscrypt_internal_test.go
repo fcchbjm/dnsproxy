@@ -11,16 +11,17 @@ import (
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
 	"github.com/ameshkov/dnsstamps"
 	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
+	"github.com/fcchbjm/dnsproxy/internal/nettest"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDNSCryptProxy(t *testing.T) {
+func TestProxy_HandleDNSRequest_dnscrypt(t *testing.T) {
 	t.Parallel()
 
 	// Prepare the proxy server.
 	dnsProxy, rc := newTestDNSCryptProxy(t)
 
-	servicetest.RequireRun(t, dnsProxy, testTimeout)
+	servicetest.RequireRun(t, dnsProxy, dnsproxytest.Timeout)
 
 	// Generate a DNS stamp.
 	port := testutil.RequireTypeAssert[*net.UDPAddr](t, dnsProxy.Addr(ProtoDNSCrypt)).Port
@@ -44,8 +45,7 @@ func newTestDNSCryptProxy(tb testing.TB) (p *Proxy, rc dnscrypt.ResolverConfig) 
 	cert, err := rc.NewCert()
 	require.NoError(tb, err)
 
-	port := dnsproxytest.NewFreePort(tb)
-	upstreamConf := newTestUpstreamConfig(tb, defaultTimeout, testDefaultUpstreamAddr)
+	port := nettest.NewFreePort(tb)
 	p = mustNew(tb, &Config{
 		Logger: testLogger,
 		DNSCryptUDPListenAddr: []*net.UDPAddr{{
@@ -54,8 +54,8 @@ func newTestDNSCryptProxy(tb testing.TB) (p *Proxy, rc dnscrypt.ResolverConfig) 
 		DNSCryptTCPListenAddr: []*net.TCPAddr{{
 			Port: int(port), IP: net.ParseIP(listenIP),
 		}},
-		UpstreamConfig:         upstreamConf,
-		TrustedProxies:         defaultTrustedProxies,
+		UpstreamConfig:         newTestUpstreamConfig(tb, newTestUpstream(tb)),
+		TrustedProxies:         dnsproxytest.DefaultTrustedProxies,
 		EnableEDNSClientSubnet: true,
 		CacheEnabled:           true,
 		CacheMinTTL:            20,
@@ -72,21 +72,18 @@ func newTestDNSCryptProxy(tb testing.TB) (p *Proxy, rc dnscrypt.ResolverConfig) 
 func checkDNSCryptProxy(tb testing.TB, proto dnscrypt.Proto, stamp dnsstamps.ServerStamp) {
 	tb.Helper()
 
-	// Create a DNSCrypt client.
 	c := dnscrypt.NewClient(&dnscrypt.ClientConfig{
 		Logger: slogutil.NewDiscardLogger(),
 		Proto:  proto,
 	})
 
-	ctx := testutil.ContextWithTimeout(tb, testTimeout)
+	ctx := testutil.ContextWithTimeout(tb, dnsproxytest.Timeout)
 
-	// Fetch the server certificate.
 	ri, err := c.DialStampContext(ctx, stamp)
 	require.NoError(tb, err)
 
-	// Send the test message.
-	msg := newTestMessage()
+	msg := dnsproxytest.NewTestRequest()
 	reply, err := c.ExchangeContext(ctx, msg, ri)
 	require.NoError(tb, err)
-	requireResponse(tb, msg, reply)
+	dnsproxytest.RequireResponse(tb, msg, reply)
 }

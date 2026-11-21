@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ func TestPendingRequests_followerCancelWhileWaiting(t *testing.T) {
 
 	pr := newDefaultPendingRequests()
 
-	leaderReq := newHostTestMessage("cancel-wait.example")
+	leaderReq := dnsproxytest.NewTestRequestWithHost("cancel-wait.example")
 	leader := &DNSContext{Req: leaderReq}
 
 	loaded, err := pr.queue(context.Background(), leader)
@@ -95,7 +96,7 @@ func TestPendingRequests_followerDeadlineWhileWaiting(t *testing.T) {
 
 	pr := newDefaultPendingRequests()
 
-	leaderReq := newHostTestMessage("deadline-wait.example")
+	leaderReq := dnsproxytest.NewTestRequestWithHost("deadline-wait.example")
 	leader := &DNSContext{Req: leaderReq}
 
 	loaded, err := pr.queue(context.Background(), leader)

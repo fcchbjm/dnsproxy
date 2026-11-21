@@ -39,7 +39,7 @@ var proxyProtocolV2Signature = [...]byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0
 
 // initTCPListeners initializes TCP listeners with configured addresses.
 func (p *Proxy) initTCPListeners(ctx context.Context) (err error) {
-	for _, addr := range p.TCPListenAddr {
+	for _, addr := range p.tcpListenAddr {
 		var ln *net.TCPListener
 		ln, err = p.listenTCP(ctx, addr)
 		if err != nil {
@@ -52,7 +52,8 @@ func (p *Proxy) initTCPListeners(ctx context.Context) (err error) {
 	return nil
 }
 
-// listenTCP returns a new TCP listener listening on addr.
+// listenTCP returns a new TCP listener listening on addr.  addr must not be
+// nil.
 func (p *Proxy) listenTCP(ctx context.Context, addr *net.TCPAddr) (ln *net.TCPListener, err error) {
 	addrStr := addr.String()
 	p.logger.InfoContext(ctx, "creating tcp server socket", "addr", addrStr)
@@ -84,7 +85,7 @@ func (p *Proxy) listenTCP(ctx context.Context, addr *net.TCPAddr) (ln *net.TCPLi
 
 // initTLSListeners initializes TLS listeners with configured addresses.
 func (p *Proxy) initTLSListeners(ctx context.Context) (err error) {
-	for _, addr := range p.TLSListenAddr {
+	for _, addr := range p.tlsListenAddr {
 		addrStr := addr.String()
 		p.logger.InfoContext(ctx, "creating tls server socket", "addr", addrStr)
 
@@ -121,9 +122,9 @@ func (p *Proxy) initTLSListeners(ctx context.Context) (err error) {
 }
 
 // tcpPacketLoop listens for incoming TCP packets.  proto must be either
-// [ProtoTCP] or [ProtoTLS].
+// [ProtoTCP] or [ProtoTLS].  l and reqSema must not be nil.
 //
-// See also the comment on Proxy.requestsSema.
+// See also the comment on [Proxy.requestsSema].
 func (p *Proxy) tcpPacketLoop(
 	ctx context.Context,
 	l net.Listener,
@@ -161,7 +162,8 @@ func (p *Proxy) tcpPacketLoop(
 }
 
 // handleTCPConnection starts a loop that handles an incoming TCP connection.
-// proto must be either [ProtoTCP] or [ProtoTLS].
+// proto must be either [ProtoTCP] or [ProtoTLS].  conn and reqSema must not be
+// nil.
 func (p *Proxy) handleTCPConnection(
 	ctx context.Context,
 	conn net.Conn,
@@ -263,7 +265,7 @@ func (p *Proxy) setConnReadDeadline(ctx context.Context, conn net.Conn, proto Pr
 // respond's SetWriteDeadline.
 func (p *Proxy) setTCPReadDeadline(conn net.Conn, proto Proto) (err error) {
 	if proto == ProtoTLS {
-		return conn.SetReadDeadline(time.Now().Add(p.TLSTimeout))
+		return conn.SetReadDeadline(time.Now().Add(p.tlsTimeout))
 	}
 
 	return conn.SetReadDeadline(time.Now().Add(defaultTimeout))
@@ -352,11 +354,11 @@ func (p *Proxy) setInitialReadDeadline(
 ) {
 	timeout := defaultTimeout
 	if proto == ProtoTLS {
-		timeout = p.TLSTimeout
+		timeout = p.tlsTimeout
 	}
 
-	if ppEnabled && timeout > p.ProxyProtocolV2ReadTimeout {
-		timeout = p.ProxyProtocolV2ReadTimeout
+	if ppEnabled && timeout > p.proxyProtocolV2ReadTimeout {
+		timeout = p.proxyProtocolV2ReadTimeout
 	}
 
 	// Bound PPv2 detection/parse and (for DoT) the TLS handshake time.
@@ -408,12 +410,12 @@ func validateProxyProtocolV2Policy(ppEnabled, hasHeader bool) (err error) {
 }
 
 func (p *Proxy) prepareTLSConn(ctx context.Context, conn net.Conn) (tlsConn *tls.Conn, err error) {
-	err = conn.SetDeadline(time.Now().Add(p.TLSTimeout))
+	err = conn.SetDeadline(time.Now().Add(p.tlsTimeout))
 	if err != nil {
 		logWithNonCrit(ctx, err, "setting tls handshake deadline", ProtoTLS, p.logger)
 	}
 
-	tlsConn = tls.Server(conn, p.TLSConfig)
+	tlsConn = tls.Server(conn, p.tlsConf)
 	err = tlsConn.Handshake()
 	if err != nil {
 		return nil, fmt.Errorf("tls handshake: %w", err)
@@ -428,9 +430,9 @@ func (p *Proxy) prepareTLSConn(ctx context.Context, conn net.Conn) (tlsConn *tls
 func (p *Proxy) proxyProtocolV2Enabled(proto Proto) (ok bool) {
 	switch proto {
 	case ProtoTCP:
-		return p.TCPProxyProtocolV2Enabled
+		return p.tcpProxyProtocolV2Enabled
 	case ProtoTLS:
-		return p.TLSProxyProtocolV2Enabled
+		return p.tlsProxyProtocolV2Enabled
 	default:
 		return false
 	}
@@ -438,6 +440,23 @@ func (p *Proxy) proxyProtocolV2Enabled(proto Proto) (ok bool) {
 
 // hasProxyProtocolV2Signature checks if the stream starts with the v2 signature.
 func hasProxyProtocolV2Signature(r *bufio.Reader) (ok bool, err error) {
+	// The signature starts with 0x0d 0x0a, which as a DNS-over-TCP length
+	// prefix is far above any complete message.  A smaller prefix therefore
+	// cannot begin a signature; don't block waiting for its remaining bytes on
+	// a short frame.
+	lenPrefix, err := r.Peek(2)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("peeking length prefix: %w", err)
+	}
+
+	if binary.BigEndian.Uint16(lenPrefix) < dns.MinMsgSize {
+		return false, nil
+	}
+
 	prefix, err := r.Peek(len(proxyProtocolV2Signature))
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -504,7 +523,7 @@ func (p *Proxy) readProxyProtocolV2Meta(
 	r *bufio.Reader,
 	remoteAddr netip.AddrPort,
 ) (cmd, famProto byte, payloadLen int, err error) {
-	if !p.TrustedProxies.Contains(remoteAddr.Addr()) {
+	if !p.trustedProxies.Contains(remoteAddr.Addr()) {
 		return 0, 0, 0, fmt.Errorf("proxy protocol source %s is not trusted", remoteAddr)
 	}
 
@@ -629,7 +648,8 @@ func parseProxyProtocolV2Addr(famProto byte, payload []byte) (addr netip.AddrPor
 }
 
 // readDNSReq returns DNS request message from the given connection or nil if
-// it failed to read it.  Properly logs the error if it happened.
+// it failed to read it.  Properly logs the error if it happened.  conn must not
+// be nil.
 func (p *Proxy) readDNSReq(ctx context.Context, conn net.Conn, proto Proto) (req *dns.Msg, err error) {
 	packet, err := readPrefixed(conn)
 	if err != nil {
@@ -649,24 +669,18 @@ func (p *Proxy) readDNSReq(ctx context.Context, conn net.Conn, proto Proto) (req
 	return req, nil
 }
 
-// errTooLarge means that a DNS message is larger than 64KiB.
-const errTooLarge errors.Error = "dns message is too large"
-
 // readPrefixed reads a DNS message with a 2-byte prefix containing message
-// length from conn.
+// length from conn.  conn must not be nil.
 func readPrefixed(conn net.Conn) (b []byte, err error) {
 	l := make([]byte, 2)
 	_, err = io.ReadFull(conn, l)
 	if err != nil {
-		return nil, fmt.Errorf("reading len: %w", err)
+		return nil, fmt.Errorf("reading msg length: %w", err)
 	}
 
-	packetLen := binary.BigEndian.Uint16(l)
-	if packetLen > dns.MaxMsgSize {
-		return nil, errTooLarge
-	}
-
-	b = make([]byte, packetLen)
+	// Don't validate the packet length, as uint16 can't hold values larger than
+	// [dns.MaxMsgSize].
+	b = make([]byte, binary.BigEndian.Uint16(l))
 	_, err = io.ReadFull(conn, b)
 	if err != nil {
 		return nil, fmt.Errorf("reading msg: %w", err)
@@ -778,11 +792,12 @@ func (p *Proxy) respondTCP(d *DNSContext) error {
 }
 
 // writePrefixed writes a DNS message to a TCP connection it first writes
-// a 2-byte prefix followed by the message itself.
+// a 2-byte prefix followed by the message itself.  conn must not be nil.
 func writePrefixed(b []byte, conn net.Conn) (err error) {
 	l := make([]byte, 2)
 	binary.BigEndian.PutUint16(l, uint16(len(b)))
 	_, err = (&net.Buffers{l, b}).WriteTo(conn)
 
+	// Don't wrap the error, since it's informative enough as is.
 	return err
 }

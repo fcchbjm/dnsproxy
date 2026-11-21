@@ -19,7 +19,7 @@ import (
 
 // initUDPListeners initializes UDP listeners with configured addresses.
 func (p *Proxy) initUDPListeners(ctx context.Context) (err error) {
-	for _, a := range p.UDPListenAddr {
+	for _, a := range p.udpListenAddr {
 		var pc *net.UDPConn
 		pc, sErr := p.listenUDP(ctx, a)
 		if sErr != nil {
@@ -32,7 +32,8 @@ func (p *Proxy) initUDPListeners(ctx context.Context) (err error) {
 	return nil
 }
 
-// listenUDP returns a new UDP connection listening on addr.
+// listenUDP returns a new UDP connection listening on addr.  addr must not be
+// nil.
 func (p *Proxy) listenUDP(ctx context.Context, addr *net.UDPAddr) (conn *net.UDPConn, err error) {
 	addrStr := addr.String()
 	p.logger.InfoContext(ctx, "creating udp server socket", "addr", addrStr)
@@ -59,8 +60,8 @@ func (p *Proxy) listenUDP(ctx context.Context, addr *net.UDPAddr) (conn *net.UDP
 		return nil, fmt.Errorf("bad conn type: %T(%[1]v)", packetConn)
 	}
 
-	if p.Config.UDPBufferSize > 0 {
-		err = conn.SetReadBuffer(p.Config.UDPBufferSize)
+	if p.udpBufferSize > 0 {
+		err = conn.SetReadBuffer(p.udpBufferSize)
 		if err != nil {
 			p.logClose(ctx, slog.LevelDebug, conn, "closing after failed read buffer size setting")
 
@@ -80,7 +81,8 @@ func (p *Proxy) listenUDP(ctx context.Context, addr *net.UDPAddr) (conn *net.UDP
 	return conn, nil
 }
 
-// udpPacketLoop listens for incoming UDP packets and handles them.
+// udpPacketLoop listens for incoming UDP packets and handles them.  conn and
+// reqSema must not be nil.
 //
 // See also the comment on [Proxy.requestsSema].
 func (p *Proxy) udpPacketLoop(ctx context.Context, conn *net.UDPConn, reqSema syncutil.Semaphore) {
@@ -123,7 +125,8 @@ func (p *Proxy) udpPacketLoop(ctx context.Context, conn *net.UDPConn, reqSema sy
 	}
 }
 
-// logUDPConnError writes suitable log message for given err.
+// logUDPConnError writes suitable log message for given err.  conn must not be
+// nil.
 func logUDPConnError(err error, conn *net.UDPConn, l *slog.Logger) {
 	if errors.Is(err, net.ErrClosed) {
 		l.Debug("udp connection closed", "addr", conn.LocalAddr())
@@ -133,6 +136,7 @@ func logUDPConnError(err error, conn *net.UDPConn, l *slog.Logger) {
 }
 
 // udpHandlePacket processes the incoming UDP packet and sends a DNS response.
+// conn and raddr must not be nil.  localIP must be valid.
 func (p *Proxy) udpHandlePacket(
 	ctx context.Context,
 	packet []byte,

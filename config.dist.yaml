@@ -3,12 +3,16 @@
 # To use it within dnsproxy specify the --config-path=/<path-to-config.yaml>
 # option.  Any other command-line options specified will override the values
 # from the config file.
----
+#
+# TODO(m.kazantsev):  Add more default values.
 bootstrap:
   - "8.8.8.8:53"
+cache-size: 65536
 # DNSSEC validation is enabled by default, if you want to disable it set it to
 # false.
 dnssec: true
+hosts-file-enabled: true
+https-server-name: "dnsproxy"
 listen-addrs:
   - "0.0.0.0"
 listen-ports:
@@ -40,13 +44,17 @@ max-go-routines: 32
 # Minimum TLS version for DoT/DoH listeners when TLS certs are configured.
 # Default when unset: 1.2. Set explicitly to lower if required (e.g. 1.0).
 # tls-min-version: 1.2
+optimistic-answer-ttl: '30s'
+optimistic-max-age: '12h'
+pending-requests-enabled: true
 ratelimit: 0
 ratelimit-subnet-len-ipv4: 24
 ratelimit-subnet-len-ipv6: 64
 # Cap per-subnet UDP ratelimit buckets (oldest evicted when full). Default 10000.
 # Only used when ratelimit > 0. Prevents unbounded memory under multi-source scans.
 ratelimit-max-size: 10000
+timeout: '10s'
 udp-buf-size: 0
 upstream:
   - "1.1.1.1:53"
-timeout: '10s'
+upstream-mode: "load_balance"

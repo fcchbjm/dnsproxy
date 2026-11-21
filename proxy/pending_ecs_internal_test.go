@@ -10,6 +10,7 @@ import (
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ func TestPendingRequests_ecsMismatchNotShared(t *testing.T) {
 		Mask: net.CIDRMask(24, netutil.IPv4BitLen),
 	}
 
-	leaderReq := newHostTestMessage("ecs-mismatch.example")
+	leaderReq := dnsproxytest.NewTestRequestWithHost("ecs-mismatch.example")
 	setECS(leaderReq, reqECS.IP, 0)
 
 	leader := &DNSContext{
@@ -103,7 +104,7 @@ func TestPendingRequests_ecsMatchStillShared(t *testing.T) {
 		Mask: net.CIDRMask(24, netutil.IPv4BitLen),
 	}
 
-	leaderReq := newHostTestMessage("ecs-match.example")
+	leaderReq := dnsproxytest.NewTestRequestWithHost("ecs-match.example")
 	setECS(leaderReq, reqECS.IP, 0)
 
 	leader := &DNSContext{Req: leaderReq, ReqECS: reqECS}
@@ -160,23 +161,27 @@ func TestPendingRequests_ecsMatchStillShared(t *testing.T) {
 func TestResolve_ecsMismatchDropsLeaderResponse(t *testing.T) {
 	t.Parallel()
 
+	ans := []dns.RR{&dns.A{
+		Hdr: dns.RR_Header{Rrtype: dns.TypeA, Name: "host.", Ttl: 60},
+		A:   net.IPv4(4, 3, 2, 1),
+	}}
+	// Deliberately disagree with the client subnet derived from Addr.
+	ecsIP := net.IPv4(9, 9, 9, 0)
+
 	u := &testUpstream{
-		ans: []dns.RR{&dns.A{
-			Hdr: dns.RR_Header{Rrtype: dns.TypeA, Name: "host.", Ttl: 60},
-			A:   net.IPv4(4, 3, 2, 1),
-		}},
-		// Deliberately disagree with the client subnet derived from Addr.
-		ecsIP: net.IPv4(9, 9, 9, 0),
+		OnAddress:  func() (addr string) { return "" },
+		OnExchange: newECSReplyHandler(&ans, &ecsIP, nil),
+		OnClose:    func() (err error) { return nil },
 	}
 
 	prx := mustNew(t, &Config{
 		Logger:        testLogger,
-		UDPListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(localhostAnyPort)},
-		TCPListenAddr: []*net.TCPAddr{net.TCPAddrFromAddrPort(localhostAnyPort)},
+		UDPListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		TCPListenAddr: []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
 		UpstreamConfig: &UpstreamConfig{
 			Upstreams: []upstream.Upstream{u},
 		},
-		TrustedProxies:         defaultTrustedProxies,
+		TrustedProxies:         dnsproxytest.DefaultTrustedProxies,
 		EnableEDNSClientSubnet: true,
 		CacheEnabled:           true,
 		CacheSizeBytes:         64 * 1024,
@@ -185,7 +190,7 @@ func TestResolve_ecsMismatchDropsLeaderResponse(t *testing.T) {
 	servicetest.RequireRun(t, prx, testTimeout)
 
 	d := &DNSContext{
-		Req:  newHostTestMessage("host"),
+		Req:  dnsproxytest.NewTestRequestWithHost("host"),
 		Addr: netip.MustParseAddrPort("1.2.3.0:1234"),
 	}
 

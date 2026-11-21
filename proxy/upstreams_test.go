@@ -5,6 +5,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/proxy"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/stretchr/testify/assert"
@@ -86,7 +87,7 @@ func TestUpstreamConfig_GetUpstreamsForDomain_noDuplicates(t *testing.T) {
 		Logger:             testLogger,
 		InsecureSkipVerify: false,
 		Bootstrap:          nil,
-		Timeout:            testTimeout,
+		Timeout:            dnsproxytest.Timeout,
 	})
 	assert.NoError(t, err)
 	testutil.CleanupAndRequireSuccess(t, config.Close)
