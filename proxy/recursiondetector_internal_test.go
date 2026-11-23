@@ -9,11 +9,14 @@ import (
 
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRecursionDetector_Check(t *testing.T) {
+	t.Parallel()
+
 	rd := newRecursionDetector(0, 2)
 
 	const (
@@ -24,13 +27,11 @@ func TestRecursionDetector_Check(t *testing.T) {
 	const nonRecID = recID * 2
 
 	sampleQuestion := dns.Question{
-		Name:  "some.domain",
+		Name:  dnsproxytest.Host,
 		Qtype: dns.TypeAAAA,
 	}
 	sampleMsg := &dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			Id: recID,
-		},
+		Id:       recID,
 		Question: []dns.Question{sampleQuestion},
 	}
 
@@ -82,6 +83,8 @@ func TestRecursionDetector_Check(t *testing.T) {
 }
 
 func TestRecursionDetector_Suspect(t *testing.T) {
+	t.Parallel()
+
 	rd := newRecursionDetector(0, 1)
 
 	testCases := []struct {
@@ -90,9 +93,7 @@ func TestRecursionDetector_Suspect(t *testing.T) {
 		want uint64
 	}{{
 		msg: &dns.Msg{
-			MsgHdr: dns.MsgHdr{
-				Id: 1234,
-			},
+			Id: 1234,
 			Question: []dns.Question{{
 				Name:  "some.domain",
 				Qtype: dns.TypeA,
@@ -119,9 +120,7 @@ func BenchmarkMsgToSignature(b *testing.B) {
 	const name = "some.not.very.long.host.name"
 
 	msg := &dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			Id: 1234,
-		},
+		Id: 1234,
 		Question: []dns.Question{{
 			Name:  name,
 			Qtype: dns.TypeAAAA,

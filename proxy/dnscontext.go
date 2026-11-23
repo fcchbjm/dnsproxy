@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"github.com/AdguardTeam/dnscrypt"
+	"github.com/c2h5oh/datasize"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
@@ -230,7 +231,7 @@ type CustomUpstreamConfig struct {
 func NewCustomUpstreamConfig(
 	u *UpstreamConfig,
 	cacheEnabled bool,
-	cacheSize int,
+	cacheSize datasize.ByteSize,
 	enableEDNSClientSubnet bool,
 ) (c *CustomUpstreamConfig) {
 	var customCache *cache

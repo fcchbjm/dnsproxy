@@ -510,9 +510,6 @@ func (p *dnsOverHTTPS) createTransport(ctx context.Context) (t http.RoundTripper
 		return nil, errors.Error("HTTP1/1 and HTTP2 are not supported by this upstream")
 	}
 
-	// Explicitly configure transport to use HTTP/2.
-	//
-	// See https://github.com/AdguardTeam/dnsproxy/issues/11.
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(true)
@@ -525,8 +522,10 @@ func (p *dnsOverHTTPS) createTransport(ctx context.Context) (t http.RoundTripper
 		MaxConnsPerHost:    dohMaxConnsPerHost,
 		MaxIdleConns:       dohMaxIdleConns,
 		// Since we have a custom DialContext, we need to use this field to make
-		// golang http.Client attempt to use HTTP/2. Otherwise, it would only be
+		// [http.Client] attempt to use HTTP/2.  Otherwise, it would only be
 		// used when negotiated on the TLS level.
+		//
+		// See https://github.com/AdguardTeam/dnsproxy/issues/11.
 		ForceAttemptHTTP2: true,
 		Protocols:         protocols,
 		HTTP2: &http.HTTP2Config{

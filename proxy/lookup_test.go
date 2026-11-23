@@ -1,4 +1,4 @@
-package proxy
+package proxy_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
+	"github.com/fcchbjm/dnsproxy/proxy"
 	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
@@ -18,16 +19,17 @@ import (
 // testTimeout is a common timeout for tests.
 const testTimeout = 1 * time.Second
 
-func TestLookupNetIP(t *testing.T) {
+func TestProxy_LookupNetIP(t *testing.T) {
 	t.Parallel()
 
-	conf := &Config{
-		Logger:         testLogger,
-		UpstreamConfig: newTestUpstreamConfig(t, newTestUpstream(t)),
+	conf := &proxy.Config{
+		Logger: testLogger,
+		UpstreamConfig: &proxy.UpstreamConfig{
+			Upstreams: []upstream.Upstream{newTestUpstream(t)},
+		},
 	}
 
-	p, err := New(conf)
-	require.NoError(t, err)
+	p := newTestProxy(t, conf)
 
 	ctx := testutil.ContextWithTimeout(t, testTimeout)
 	addrs, err := p.LookupNetIP(ctx, "", dnsproxytest.Host)
@@ -38,7 +40,7 @@ func TestLookupNetIP(t *testing.T) {
 	assert.Contains(t, addrs, wantAddr)
 }
 
-func TestLookupNetIP_usesRequestHandler(t *testing.T) {
+func TestProxy_LookupNetIP_usesRequestHandler(t *testing.T) {
 	t.Parallel()
 
 	const host = "lookup-handler.example."
@@ -47,30 +49,32 @@ func TestLookupNetIP_usesRequestHandler(t *testing.T) {
 	var handlerCalls atomic.Uint32
 	ups := &countingTestUpstream{}
 
-	p := mustNew(t, &Config{
+	p := newTestProxy(t, &proxy.Config{
 		Logger: testLogger,
-		UpstreamConfig: &UpstreamConfig{
+		UpstreamConfig: &proxy.UpstreamConfig{
 			Upstreams: []upstream.Upstream{ups},
 		},
-		RequestHandler: &testHandler{
-			OnHandle: func(_ context.Context, _ *Proxy, d *DNSContext) (err error) {
-				handlerCalls.Add(1)
-				d.Res = (&dns.Msg{}).SetReply(d.Req)
-				if len(d.Req.Question) == 1 && d.Req.Question[0].Qtype == dns.TypeA {
-					d.Res.Answer = []dns.RR{&dns.A{
-						Hdr: dns.RR_Header{
-							Name:   d.Req.Question[0].Name,
-							Rrtype: dns.TypeA,
-							Class:  dns.ClassINET,
-							Ttl:    60,
-						},
-						A: want.AsSlice(),
-					}}
-				}
+		RequestHandler: proxy.HandlerFunc(func(
+			_ context.Context,
+			_ *proxy.Proxy,
+			d *proxy.DNSContext,
+		) (err error) {
+			handlerCalls.Add(1)
+			d.Res = (&dns.Msg{}).SetReply(d.Req)
+			if len(d.Req.Question) == 1 && d.Req.Question[0].Qtype == dns.TypeA {
+				d.Res.Answer = []dns.RR{&dns.A{
+					Hdr: dns.RR_Header{
+						Name:   d.Req.Question[0].Name,
+						Rrtype: dns.TypeA,
+						Class:  dns.ClassINET,
+						Ttl:    60,
+					},
+					A: want.AsSlice(),
+				}}
+			}
 
-				return nil
-			},
-		},
+			return nil
+		}),
 	})
 
 	addrs, err := p.LookupNetIP(context.Background(), "", host)
@@ -80,20 +84,20 @@ func TestLookupNetIP_usesRequestHandler(t *testing.T) {
 	assert.Zero(t, ups.n.Load(), "Lookup must not bypass RequestHandler to upstream")
 }
 
-func TestLookupNetIP_errDrop(t *testing.T) {
+func TestProxy_LookupNetIP_errDrop(t *testing.T) {
 	t.Parallel()
 
-	p := mustNew(t, &Config{
+	p := newTestProxy(t, &proxy.Config{
 		Logger: testLogger,
-		UpstreamConfig: &UpstreamConfig{
-			Upstreams: []upstream.Upstream{&testUpstream{}},
+		UpstreamConfig: &proxy.UpstreamConfig{
+			Upstreams: []upstream.Upstream{newTestUpstream(t)},
 		},
-		RequestHandler: HandlerFunc(func(
+		RequestHandler: proxy.HandlerFunc(func(
 			_ context.Context,
-			_ *Proxy,
-			_ *DNSContext,
+			_ *proxy.Proxy,
+			_ *proxy.DNSContext,
 		) (err error) {
-			return ErrDrop
+			return proxy.ErrDrop
 		}),
 	})
 
@@ -123,7 +127,11 @@ func (u *countingTestUpstream) Exchange(
 
 // Address implements the [upstream.Upstream] interface for
 // *countingTestUpstream.
-func (u *countingTestUpstream) Address() (addr string) { return "counting-test" }
+func (u *countingTestUpstream) Address() (addr string) {
+	return "https://" + dnsproxytest.Host
+}
 
 // Close implements the [upstream.Upstream] interface for *countingTestUpstream.
-func (u *countingTestUpstream) Close() (err error) { return nil }
+func (u *countingTestUpstream) Close() (err error) {
+	return nil
+}

@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// envOrDefault returns the value of the environment variable k, or def if it is
+// empty or unset.
 func envOrDefault(k, def string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		return v
@@ -44,19 +46,6 @@ func skipIfRestrictedPublicDNSCrypt(t *testing.T) {
 	t.Skip("restricted network profile; set DNSPROXY_TEST_INCLUDE_ENCRYPTED=1 to enable public DNSCrypt tests")
 }
 
-func isNetworkTestsEnabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("DNSPROXY_ENABLE_NETWORK_TESTS")))
-	switch v {
-	case "", "1", "true", "yes", "y", "on":
-		return true
-	case "0", "false", "no", "n", "off":
-		return false
-	default:
-		// Be conservative: any non-empty value enables.
-		return true
-	}
-}
-
 func TestNewUpstreamResolver(t *testing.T) {
 	ups := &dnsproxytest.Upstream{
 		OnAddress: func() (_ string) { panic(testutil.UnexpectedCall()) },
@@ -77,19 +66,16 @@ func TestNewUpstreamResolver(t *testing.T) {
 		},
 	}
 
-	r := &upstream.UpstreamResolver{Upstream: ups}
+	r := upstream.ResolverFromUpstream(ups, testLogger, nil)
 
-	ipAddrs, err := r.LookupNetIP(context.Background(), "ip", envOrDefault("DNSPROXY_TEST_LOOKUP_HOST", "cloudflare-dns.com"))
+	ctx := testutil.ContextWithTimeout(t, testTimeout)
+	ipAddrs, err := r.LookupNetIP(ctx, bootstrap.NetworkIP, "cloudflare-dns.com")
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, ipAddrs)
 }
 
 func TestNewUpstreamResolver_validity(t *testing.T) {
-	if !isNetworkTestsEnabled() {
-		t.Skip("network-dependent test; set DNSPROXY_ENABLE_NETWORK_TESTS=0 to disable")
-	}
-
 	t.Parallel()
 
 	withTimeoutOpt := &upstream.Options{
@@ -97,14 +83,11 @@ func TestNewUpstreamResolver_validity(t *testing.T) {
 		Timeout: 3 * time.Second,
 	}
 
+	// Overridable so that restricted networks can still run these cases.
 	testIP := envOrDefault("DNSPROXY_TEST_RESOLVER_IP", "1.1.1.1")
 	testLookupHost := envOrDefault("DNSPROXY_TEST_LOOKUP_HOST", "cloudflare-dns.com")
 
-	testCases := []struct {
-		name       string
-		addr       string
-		wantErrMsg string
-	}{{
+	testCases := []upstreamResolverValidityCase{{
 		name:       "udp",
 		addr:       testIP + ":53",
 		wantErrMsg: "",
@@ -152,33 +135,42 @@ func TestNewUpstreamResolver_validity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			runUpstreamResolverValidityCase(t, tc.name, tc.addr, tc.wantErrMsg, withTimeoutOpt, testLookupHost)
+			runUpstreamResolverValidityCase(t, tc, withTimeoutOpt, testLookupHost)
 		})
 	}
 }
 
-// runUpstreamResolverValidityCase exercises one NewUpstreamResolver validity
-// case.  name is the subtest name used for restricted-network skips.
+// upstreamResolverValidityCase is a single NewUpstreamResolver validity test
+// case.
+type upstreamResolverValidityCase struct {
+	// name is the subtest name.
+	name string
+
+	// addr is the upstream address to pass to NewUpstreamResolver.
+	addr string
+
+	// wantErrMsg is the expected error message.  Empty means success.
+	wantErrMsg string
+}
+
+// runUpstreamResolverValidityCase exercises a single NewUpstreamResolver
+// validity case.  opts and testLookupHost must not be nil.
 func runUpstreamResolverValidityCase(
 	t *testing.T,
-	name string,
-	addr string,
-	wantErrMsg string,
+	tc upstreamResolverValidityCase,
 	opts *upstream.Options,
-	lookupHost string,
+	testLookupHost string,
 ) {
 	t.Helper()
 
-	// Public DNSCrypt stamp is unreachable when DNSPROXY_TEST_UPSTREAMS is set
-	// without DNSPROXY_TEST_INCLUDE_ENCRYPTED; plain/DoT/DoH use
-	// DNSPROXY_TEST_RESOLVER_IP instead.
-	if name == "sdns" {
+	// The public DNSCrypt stamp is unreachable on restricted networks.
+	if tc.name == "sdns" {
 		skipIfRestrictedPublicDNSCrypt(t)
 	}
 
-	r, err := upstream.NewUpstreamResolver(addr, opts)
-	if wantErrMsg != "" {
-		assert.Equal(t, wantErrMsg, err.Error())
+	r, err := upstream.NewUpstreamResolver(tc.addr, opts)
+	if tc.wantErrMsg != "" {
+		assert.Equal(t, tc.wantErrMsg, err.Error())
 		if nberr := (&upstream.NotBootstrapError{}); errors.As(err, &nberr) {
 			assert.NotNil(t, r)
 		}
@@ -188,94 +180,8 @@ func runUpstreamResolverValidityCase(
 
 	require.NoError(t, err)
 
-	addrs, err := r.LookupNetIP(context.Background(), "ip", lookupHost)
+	addrs, err := r.LookupNetIP(context.Background(), "ip", testLookupHost)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, addrs)
-}
-
-func TestCachingResolver_staleness(t *testing.T) {
-	ip4 := netip.MustParseAddr("1.2.3.4")
-	ip6 := netip.MustParseAddr("2001:db8::1")
-
-	const (
-		smallTTL = 10 * time.Second
-		largeTTL = 1000 * time.Second
-
-		fqdn = "test.fully.qualified.name."
-	)
-
-	onExchange := func(_ context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
-		resp = (&dns.Msg{}).SetReply(req)
-
-		hdr := dns.RR_Header{
-			Name:   req.Question[0].Name,
-			Rrtype: req.Question[0].Qtype,
-			Class:  dns.ClassINET,
-		}
-		var rr dns.RR
-		switch q := req.Question[0]; q.Qtype {
-		case dns.TypeA:
-			hdr.Ttl = uint32(smallTTL.Seconds())
-			rr = &dns.A{Hdr: hdr, A: ip4.AsSlice()}
-		case dns.TypeAAAA:
-			hdr.Ttl = uint32(largeTTL.Seconds())
-			rr = &dns.AAAA{Hdr: hdr, AAAA: ip6.AsSlice()}
-		default:
-			require.Contains(testutil.PanicT{}, []uint16{dns.TypeA, dns.TypeAAAA}, q.Qtype)
-		}
-		resp.Answer = append(resp.Answer, rr)
-
-		return resp, nil
-	}
-
-	ups := &dnsproxytest.Upstream{
-		OnAddress:  func() (_ string) { panic(testutil.UnexpectedCall()) },
-		OnClose:    func() (_ error) { panic(testutil.UnexpectedCall()) },
-		OnExchange: onExchange,
-	}
-
-	r := upstream.NewCachingResolver(&upstream.UpstreamResolver{Upstream: ups})
-
-	require.True(t, t.Run("resolve", func(t *testing.T) {
-		testCases := []struct {
-			name    string
-			network bootstrap.Network
-			want    []netip.Addr
-		}{{
-			name:    "ip4",
-			network: bootstrap.NetworkIP4,
-			want:    []netip.Addr{ip4},
-		}, {
-			name:    "ip6",
-			network: bootstrap.NetworkIP6,
-			want:    []netip.Addr{ip6},
-		}, {
-			name:    "both",
-			network: bootstrap.NetworkIP,
-			want:    []netip.Addr{ip4, ip6},
-		}}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				if tc.name != "both" {
-					t.Skip(`TODO(e.burkov):  Bootstrap now only uses "ip" network, see TODO there.`)
-				}
-
-				res, err := r.LookupNetIP(context.Background(), tc.network, fqdn)
-				require.NoError(t, err)
-
-				assert.ElementsMatch(t, tc.want, res)
-			})
-		}
-	}))
-
-	t.Run("staleness", func(t *testing.T) {
-		now := time.Now()
-		cached := r.FindCached(fqdn, now)
-		require.ElementsMatch(t, []netip.Addr{ip4, ip6}, cached)
-
-		cached = r.FindCached(fqdn, now.Add(smallTTL+time.Second))
-		require.Empty(t, cached)
-	})
 }

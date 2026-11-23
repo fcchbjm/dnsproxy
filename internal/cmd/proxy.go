@@ -17,6 +17,8 @@ import (
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/osutil"
+	"github.com/AdguardTeam/golibs/validate"
+	"github.com/c2h5oh/datasize"
 	"github.com/fcchbjm/dnsproxy/internal/dnsmsg"
 	"github.com/fcchbjm/dnsproxy/internal/middleware"
 	proxynetutil "github.com/fcchbjm/dnsproxy/internal/netutil"
@@ -87,10 +89,15 @@ func createProxyConfig(
 		}
 	}
 
+	if err = conf.validateCacheSize(); err != nil {
+		// Don't wrap the error because it's informative enough as is.
+		return nil, err
+	}
+
 	proxyConf = &proxy.Config{
 		Logger:                   l.With(slogutil.KeyPrefix, proxy.LogPrefix),
 		CacheEnabled:             conf.Cache,
-		CacheSizeBytes:           conf.CacheSizeBytes,
+		CacheSizeBytes:           datasize.ByteSize(conf.CacheSizeBytes),
 		CacheMinTTL:              conf.CacheMinTTL,
 		CacheMaxTTL:              conf.CacheMaxTTL,
 		CacheOptimisticAnswerTTL: time.Duration(conf.OptimisticAnswerTTL),
@@ -140,6 +147,16 @@ func createProxyConfig(
 	errs = append(errs, conf.initTrustedProxies(l, proxyConf))
 
 	return proxyConf, errors.Join(errs...)
+}
+
+// validateCacheSize returns an error if the configured cache size is negative.
+// The size only matters when the cache is enabled.
+func (conf *configuration) validateCacheSize() (err error) {
+	if !conf.Cache {
+		return nil
+	}
+
+	return validate.NotNegative("cache-size", conf.CacheSizeBytes)
 }
 
 // isEmpty returns false if uc contains at least a single upstream.  uc must not

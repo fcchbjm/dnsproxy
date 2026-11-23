@@ -12,6 +12,7 @@ import (
 	"github.com/AdguardTeam/golibs/testutil/servicetest"
 	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/proxyutil"
+	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/stretchr/testify/assert"
@@ -26,9 +27,11 @@ func TestProxy_HandleDNSRequest_quicTruncatedRequest(t *testing.T) {
 
 	conf := &Config{
 		Logger:         testLogger,
-		QUICListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		QUICListenAddr: []*net.UDPAddr{dnsproxytest.LocalhostAnyPortUDP},
 		TLSConfig:      serverConfig,
-		UpstreamConfig: newTestUpstreamConfig(t, newTestUpstream(t)),
+		UpstreamConfig: &UpstreamConfig{
+			Upstreams: []upstream.Upstream{newTestUpstream(t)},
+		},
 		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 		RequestHandler: &testHandler{
 			OnHandle: func(ctx context.Context, p *Proxy, d *DNSContext) (_ error) {
@@ -37,13 +40,11 @@ func TestProxy_HandleDNSRequest_quicTruncatedRequest(t *testing.T) {
 		},
 	}
 
-	dnsProxy := mustNew(t, conf)
+	dnsProxy := newTestProxy(t, conf)
 
 	req := (&dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			Id:               0,
-			RecursionDesired: true,
-		},
+		Id:               0,
+		RecursionDesired: true,
 		Question: []dns.Question{{
 			Name:   dns.Fqdn(dnsproxytest.Host),
 			Qtype:  dns.TypeA,

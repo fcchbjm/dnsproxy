@@ -21,6 +21,7 @@ import (
 	proxytest "github.com/fcchbjm/dnsproxy/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/internal/dnsproxytest"
 	"github.com/fcchbjm/dnsproxy/proxy"
+	"github.com/fcchbjm/dnsproxy/upstream"
 	"github.com/miekg/dns"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -68,19 +69,19 @@ func TestProxy_HandleDNSRequest_https(t *testing.T) {
 				HTTP3Enabled:    tc.http3,
 			}
 
-			tlsListenAddr := net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)
-			quicListenAddr := net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)
-			dnsProxy, err := proxy.New(&proxy.Config{
+			tlsListenAddr := dnsproxytest.LocalhostAnyPortTCP
+			quicListenAddr := dnsproxytest.LocalhostAnyPortUDP
+			dnsProxy := newTestProxy(t, &proxy.Config{
 				Logger:         testLogger,
 				TLSListenAddr:  []*net.TCPAddr{tlsListenAddr},
 				QUICListenAddr: []*net.UDPAddr{quicListenAddr},
 				TLSConfig:      tlsConf,
-				UpstreamConfig: newTestUpstreamConfig(t),
+				UpstreamConfig: &proxy.UpstreamConfig{
+					Upstreams: []upstream.Upstream{newTestUpstream(t)},
+				},
 				TrustedProxies: dnsproxytest.DefaultTrustedProxies,
 				HTTPConfig:     httpConf,
 			})
-			require.NoError(t, err)
-
 			servicetest.RequireRun(t, dnsProxy, dnsproxytest.Timeout)
 
 			// Create the HTTP client that we'll be using for this test.
@@ -122,14 +123,14 @@ func TestProxy_HandleDNSRequest_trustedProxies(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			testProxyRealIPDetection(t, tc.trustedProxy, hdr, tc.wantClientIP)
+			subtestProxyRealIPDetection(t, tc.trustedProxy, hdr, tc.wantClientIP)
 		})
 	}
 }
 
-// testProxyRealIPDetection starts a proxy and checks the client IP detected
+// subtestProxyRealIPDetection starts a proxy and checks the client IP detected
 // from hdr.  trustedProxy and wantClientIP must be valid.
-func testProxyRealIPDetection(
+func subtestProxyRealIPDetection(
 	tb testing.TB,
 	trustedProxy netip.Addr,
 	hdr http.Header,
@@ -149,18 +150,18 @@ func testProxyRealIPDetection(
 		ListenAddresses: []netip.AddrPort{dnsproxytest.LocalhostAnyPort},
 	}
 	trustedProxies := netip.PrefixFrom(trustedProxy, trustedProxy.BitLen())
-	dnsProxy, err := proxy.New(&proxy.Config{
-		Logger:         testLogger,
-		UpstreamConfig: newTestUpstreamConfig(tb),
+	dnsProxy := newTestProxy(tb, &proxy.Config{
+		Logger: testLogger,
+		UpstreamConfig: &proxy.UpstreamConfig{
+			Upstreams: []upstream.Upstream{newTestUpstream(tb)},
+		},
 		TrustedProxies: trustedProxies,
 		RequestHandler: reqHandler,
 		TLSConfig:      tlsConf,
-		TLSListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
-		QUICListenAddr: []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		TLSListenAddr:  []*net.TCPAddr{dnsproxytest.LocalhostAnyPortTCP},
+		QUICListenAddr: []*net.UDPAddr{dnsproxytest.LocalhostAnyPortUDP},
 		HTTPConfig:     httpConf,
 	})
-	require.NoError(tb, err)
-
 	client := createTestHTTPClient(dnsProxy, caPem, false)
 	msg := dnsproxytest.NewTestRequest()
 
@@ -226,7 +227,7 @@ func TestProxy_HandleDNSRequest_realIPFromHeader(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			testProxyRealIPDetection(t, testProxyAddr, tc.hdr, tc.wantClientIP)
+			subtestProxyRealIPDetection(t, testProxyAddr, tc.hdr, tc.wantClientIP)
 		})
 	}
 }
@@ -276,7 +277,7 @@ func TestProxy_HandleDNSRequest_realIPFromHeaderXFF(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			testProxyRealIPDetection(t, testProxyAddr, tc.hdr, tc.wantClientIP)
+			subtestProxyRealIPDetection(t, testProxyAddr, tc.hdr, tc.wantClientIP)
 		})
 	}
 }

@@ -248,3 +248,11 @@ func createTestHTTPClient(
 		Timeout:   defaultTimeout,
 	}
 }
+
+// mustNew creates a new proxy or fails the test.  Fork-only tests predate the
+// upstream newTestProxy helper and keep using this name.
+func mustNew(tb testing.TB, conf *Config) (p *Proxy) {
+	tb.Helper()
+
+	return newTestProxy(tb, conf)
+}

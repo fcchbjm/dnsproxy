@@ -81,7 +81,7 @@ func newTestTLSConfig(t *testing.T) *tls.Config {
 	}
 }
 
-func newTestProxy() *Proxy {
+func newBareTestProxy() *Proxy {
 	return &Proxy{
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -126,7 +126,7 @@ func tlsPair(t *testing.T) (serverTLS *tls.Conn, serverRaw *countingConn, client
 }
 
 func TestShutdownTCPConnGracefully_TLS_ClientInitiatedClose_SkipsTLSCloseNotify(t *testing.T) {
-	p := newTestProxy()
+	p := newBareTestProxy()
 
 	serverTLS, raw, clientTLS, cleanup := tlsPair(t)
 	defer cleanup()
@@ -150,7 +150,7 @@ func TestShutdownTCPConnGracefully_TLS_ClientInitiatedClose_SkipsTLSCloseNotify(
 }
 
 func TestShutdownTCPConnGracefully_TLS_DefaultPath_SendsTLSCloseNotify(t *testing.T) {
-	p := newTestProxy()
+	p := newBareTestProxy()
 
 	serverTLS, raw, _, cleanup := tlsPair(t)
 	defer cleanup()

@@ -26,6 +26,7 @@ import (
 	"github.com/AdguardTeam/golibs/syncutil"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/AdguardTeam/golibs/validate"
+	"github.com/c2h5oh/datasize"
 	"github.com/fcchbjm/dnsproxy/internal/dnsmsg"
 	"github.com/fcchbjm/dnsproxy/internal/fastip"
 	proxynetutil "github.com/fcchbjm/dnsproxy/internal/netutil"
@@ -323,7 +324,7 @@ type Proxy struct {
 	fastestPingTimeout time.Duration
 
 	// cacheSizeBytes is the maximum cache size in bytes.
-	cacheSizeBytes int
+	cacheSizeBytes datasize.ByteSize
 
 	// The size of the read buffer on the underlying socket.  Larger read
 	// buffers can handle larger bursts of requests before packets get dropped.
@@ -982,8 +983,13 @@ func (p *Proxy) replyFromUpstream(ctx context.Context, d *DNSContext) (ok bool, 
 
 	// Perform the DNS request.
 	resp, u, err := p.exchangeUpstreams(ctx, req, wrapped)
-	if dns64Ups := p.performDNS64(ctx, req, resp, wrapped); dns64Ups != nil {
+
+	// Pass the original, unwrapped upstreams: performDNS64 wraps them itself,
+	// so that the DNS64 exchange doesn't update the statistics of the first
+	// exchange's wrappers concurrently with it.
+	if dns64Ups, dns64Wrapped := p.performDNS64(ctx, req, resp, upstreams); dns64Ups != nil {
 		u = dns64Ups
+		wrapped = dns64Wrapped
 	} else if p.isBogusNXDomain(resp) {
 		p.logger.DebugContext(ctx, "response contains bogus-nxdomain ip")
 		resp = p.messages.NewMsgNXDOMAIN(req)
@@ -1121,7 +1127,7 @@ func (p *Proxy) Resolve(ctx context.Context, dctx *DNSContext) (err error) {
 	// See https://github.com/imp/dnsmasq/blob/770bce967cfc9967273d0acfb3ea018fb7b17522/src/forward.c#L1169-L1172.
 	if cacheWorks && ok && dctx.Res != nil && !dctx.Res.CheckingDisabled {
 		// Cache the response with DNSSEC RRs.
-		p.cacheResp(dctx)
+		p.cacheResp(ctx, dctx)
 	}
 
 	// It is possible that the response is nil if the upstream hasn't been
